@@ -58,8 +58,6 @@ type AppView =
   | 'admin'
   | 'monitor';
 
-const PREVIEW_ROLE_KEY = 'mobile_godot_preview_role';
-
 function formatCountdown(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
   const hrs = Math.floor(s / 3600);
@@ -91,36 +89,21 @@ export default function App() {
   // Auth state (shared across Course, Lesson, Test, Admin, Monitor)
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authInitialized, setAuthInitialized] = useState<boolean>(false);
-  const [previewRole, setPreviewRole] = useState<'admin' | 'student' | null>(() => {
-    try {
-      const val = localStorage.getItem(PREVIEW_ROLE_KEY);
-      return val === 'admin' || val === 'student' ? val : null;
-    } catch {
-      return null;
-    }
-  });
   const [authLoading, setAuthLoading] = useState<boolean>(false);
-  const [authError, setAuthError] = useState<string | null>(null);
 
   // Teacher "Enter as Student" verification mode
   const [studentViewMode, setStudentViewMode] = useState<boolean>(false);
   const [simulateGuest, setSimulateGuest] = useState<boolean>(false);
 
-  const isRealAdmin = firebaseUser?.uid === ADMIN_UID || previewRole === 'admin';
+  const isRealAdmin = firebaseUser?.uid === ADMIN_UID;
   const isAdmin = isRealAdmin && !studentViewMode;
-  const rawSignedIn = Boolean(firebaseUser) || previewRole !== null;
+  const rawSignedIn = Boolean(firebaseUser);
   const isSignedIn = studentViewMode && simulateGuest ? false : rawSignedIn;
 
   const userLabel =
     studentViewMode
       ? 'Студент (проверка преподавателя)'
-      : firebaseUser?.displayName ||
-        firebaseUser?.email ||
-        (previewRole === 'admin'
-          ? 'Преподаватель (Предпросмотр)'
-          : previewRole === 'student'
-            ? 'Студент (Предпросмотр)'
-            : 'Гость');
+      : firebaseUser?.displayName || firebaseUser?.email || 'Гость';
 
   // Course data state
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -246,52 +229,16 @@ export default function App() {
 
   const handleGitHubSignIn = async () => {
     setAuthLoading(true);
-    setAuthError(null);
     try {
       await signInWithPopup(auth, githubProvider);
-      try {
-        localStorage.removeItem(PREVIEW_ROLE_KEY);
-      } catch {
-        // ignore
-      }
-      setPreviewRole(null);
-    } catch (err: unknown) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/unauthorized-domain' || code === 'auth/operation-not-allowed') {
-        setAuthError(
-          'Текущий домен предпросмотра не добавлен в Authorized Domains проекта Firebase (it-course-lele). На kkoova.github.io вход через GitHub работает напрямую, а здесь можно открыть портал в режиме предпросмотра.'
-        );
-      } else if (code === 'auth/popup-blocked' || code === 'auth/popup-closed-by-user') {
-        setAuthError(
-          'Окно авторизации GitHub было закрыто или заблокировано. Повторите попытку или используйте режим предпросмотра.'
-        );
-      } else {
-        setAuthError(`Ошибка авторизации: ${(err as Error)?.message || 'неизвестная ошибка'}`);
-      }
+    } catch (err) {
+      console.warn('GitHub sign-in cancelled or failed:', err);
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const activatePreviewRole = (role: 'admin' | 'student') => {
-    try {
-      localStorage.setItem(PREVIEW_ROLE_KEY, role);
-    } catch {
-      // ignore
-    }
-    setPreviewRole(role);
-    setStudentViewMode(false);
-    setSimulateGuest(false);
-    setAuthError(null);
-  };
-
   const handleSignOut = async () => {
-    try {
-      localStorage.removeItem(PREVIEW_ROLE_KEY);
-    } catch {
-      // ignore
-    }
-    setPreviewRole(null);
     setStudentViewMode(false);
     setSimulateGuest(false);
     if (firebaseUser) {
@@ -562,18 +509,6 @@ export default function App() {
             <p className="text-xs text-[#9FB0C0] leading-relaxed">
               Экран мониторинга статистики и нарушений доступен только преподавателю (UID администратора).
             </p>
-            {authError && (
-              <div className="p-3 rounded-lg bg-[#251E15] border border-[#E5A454]/40 text-xs text-[#F3D3A7] space-y-2 text-left">
-                <p>{authError}</p>
-                <button
-                  type="button"
-                  onClick={() => activatePreviewRole('admin')}
-                  className="px-3 py-1.5 rounded bg-[#E5A454] text-[#1A140C] font-semibold cursor-pointer"
-                >
-                  Открыть предпросмотр монитора
-                </button>
-              </div>
-            )}
             <button
               type="button"
               disabled={authLoading}
@@ -810,36 +745,6 @@ export default function App() {
         onSignIn={handleGitHubSignIn}
         onSignOut={handleSignOut}
       />
-
-      {/* Shared Auth Error / Preview Banner */}
-      {authError && (
-        <div className="max-w-7xl w-full mx-auto px-6 pt-5">
-          <div className="p-4 rounded-xl border border-[#E5A454]/50 bg-[#251E15] text-sm text-[#F3D3A7] flex flex-wrap items-center justify-between gap-4">
-            <div className="space-y-1 max-w-3xl">
-              <div className="font-semibold text-[#E5A454] text-xs">
-                Авторизация GitHub в текущем окне ограничена
-              </div>
-              <p className="text-xs text-[#D8C2A2] leading-relaxed">{authError}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => activatePreviewRole('student')}
-                className="px-3 py-2 rounded-md border border-[#E5A454] text-[#F3D3A7] text-xs font-semibold hover:bg-[#E5A454]/10 cursor-pointer"
-              >
-                Войти как студент
-              </button>
-              <button
-                type="button"
-                onClick={() => activatePreviewRole('admin')}
-                className="px-3 py-2 rounded-md bg-[#E5A454] text-[#1A140C] text-xs font-semibold hover:bg-[#F0B469] cursor-pointer"
-              >
-                Войти как преподаватель
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Main Workspace */}
       <main className="flex-1">
