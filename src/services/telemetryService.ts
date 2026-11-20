@@ -32,11 +32,33 @@ export interface ViolationEvent {
   createdAtMs: number;
 }
 
+export interface GroupTestSchedule {
+  assigned: boolean;
+  scheduledAt: string;
+  unlocked: boolean;
+}
+
+export interface TestDefinition {
+  id: string;
+  title: string;
+  description: string;
+  durationMinutes: number;
+  questionIds: number[];
+  isUnlocked: boolean;
+  defaultScheduledAt: string;
+  groupSchedules: Record<string, GroupTestSchedule>;
+}
+
 export interface StudentSession {
   id: string;
   studentName: string;
   group: string;
   githubUid?: string | null;
+  testId?: string;
+  testTitle?: string;
+  durationMinutes?: number;
+  deadlineMs?: number | null;
+  timedOut?: boolean;
   status: 'in_progress' | 'violation_paused' | 'completed';
   currentQuestion: number;
   totalQuestions: number;
@@ -58,7 +80,22 @@ export type SyncStatus = 'connecting' | 'connected' | 'permission_denied' | 'err
 const LOCAL_SESSIONS_KEY = 'godot_test_local_sessions_v1';
 const LOCAL_VIOLATIONS_KEY = 'godot_test_local_violations_v1';
 const LOCAL_ROSTER_KEY = 'godot_test_local_roster_v1';
+const LOCAL_TESTS_KEY = 'godot_test_local_configs_v1';
 const CHANNEL_NAME = 'godot_test_telemetry_v1';
+
+export const DEFAULT_TESTS: TestDefinition[] = [
+  {
+    id: 'godot-core-1',
+    title: 'Базовый контроль: Godot Engine 4',
+    description:
+      '27 практических заданий по иерархии узлов, GDScript, физике 2D, сигналам и интерфейсу.',
+    durationMinutes: 25,
+    questionIds: [],
+    isUnlocked: false,
+    defaultScheduledAt: '',
+    groupSchedules: {},
+  },
+];
 
 let broadcastChannel: BroadcastChannel | null = null;
 function getChannel(): BroadcastChannel | null {
@@ -151,11 +188,85 @@ function writeLocalRoster(groups: GroupRoster[]) {
   }
 }
 
+export function readLocalTestConfigs(): TestDefinition[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_TESTS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // fallback
+  }
+  return DEFAULT_TESTS;
+}
+
+function writeLocalTestConfigs(tests: TestDefinition[]) {
+  try {
+    localStorage.setItem(LOCAL_TESTS_KEY, JSON.stringify(tests));
+    getChannel()?.postMessage({ kind: 'tests_update', tests });
+  } catch {
+    // ignore
+  }
+}
+
+export function formatScheduledDateRu(isoStr: string): string {
+  if (!isoStr) return '';
+  const dt = new Date(isoStr);
+  if (Number.isNaN(dt.getTime())) return isoStr;
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(dt);
+}
+
+export function getTestGroupAccess(
+  test: TestDefinition,
+  groupName: string
+): { allowed: boolean; scheduledAt: string; reason: string } {
+  const gs = test.groupSchedules?.[groupName];
+  const scheduledAt = gs?.scheduledAt || test.defaultScheduledAt || '';
+
+  if (test.isUnlocked || gs?.unlocked) {
+    return {
+      allowed: true,
+      scheduledAt,
+      reason: 'Доступ открыт преподавателем',
+    };
+  }
+
+  if (scheduledAt) {
+    return {
+      allowed: false,
+      scheduledAt,
+      reason: `Тест для группы «${groupName}» назначен на ${formatScheduledDateRu(scheduledAt)}. Переход закрыт до разблокировки преподавателем.`,
+    };
+  }
+
+  return {
+    allowed: false,
+    scheduledAt: '',
+    reason: `Тест для группы «${groupName}» пока заблокирован преподавателем.`,
+  };
+}
+
+export function hasAnyUnlockedAccess(test: TestDefinition): boolean {
+  if (test.isUnlocked) return true;
+  const schedules = Object.values(test.groupSchedules || {});
+  return schedules.some((gs) => gs.unlocked);
+}
+
 export async function createOrStartSession(params: {
   studentName: string;
   group: string;
   totalQuestions: number;
   githubUid?: string | null;
+  testId?: string;
+  testTitle?: string;
+  durationMinutes?: number;
+  deadlineMs?: number | null;
 }): Promise<StudentSession> {
   const now = Date.now();
   const id = `sess_${now}_${Math.random().toString(36).slice(2, 8)}`;
@@ -164,6 +275,11 @@ export async function createOrStartSession(params: {
     studentName: params.studentName,
     group: params.group,
     githubUid: params.githubUid || null,
+    testId: params.testId || 'godot-core-1',
+    testTitle: params.testTitle || 'Базовый контроль: Godot Engine 4',
+    durationMinutes: params.durationMinutes ?? 25,
+    deadlineMs: params.deadlineMs ?? null,
+    timedOut: false,
     status: 'in_progress',
     currentQuestion: 1,
     totalQuestions: params.totalQuestions,
@@ -266,14 +382,18 @@ export async function recordViolation(
 
 export async function completeSession(
   session: StudentSession,
-  result: TestGradeResult
+  result: TestGradeResult,
+  opts?: { timedOut?: boolean; answeredCount?: number }
 ): Promise<StudentSession> {
   const now = Date.now();
+  const timedOut = Boolean(opts?.timedOut);
+  const finalAnswered = opts?.answeredCount ?? session.totalQuestions;
   const updatedSession: StudentSession = {
     ...session,
     status: 'completed',
+    timedOut,
     currentQuestion: session.totalQuestions,
-    answeredCount: session.totalQuestions,
+    answeredCount: finalAnswered,
     score: result.score,
     percentage: result.percentage,
     gradeLabel: result.gradeLabel,
@@ -288,8 +408,9 @@ export async function completeSession(
   try {
     await updateDoc(doc(db, 'godot_test_sessions', session.id), {
       status: 'completed',
+      timedOut,
       currentQuestion: session.totalQuestions,
-      answeredCount: session.totalQuestions,
+      answeredCount: finalAnswered,
       score: result.score,
       percentage: result.percentage,
       gradeLabel: result.gradeLabel,
@@ -359,6 +480,62 @@ export function subscribeRoster(
   const handleStorage = (ev: StorageEvent) => {
     if (ev.key === LOCAL_ROSTER_KEY) {
       onUpdate(readLocalRoster());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export async function saveTestConfigs(tests: TestDefinition[]): Promise<void> {
+  writeLocalTestConfigs(tests);
+  try {
+    await setDoc(doc(db, 'godot_test_config', 'tests'), {
+      tests,
+      updatedAtMs: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Firestore tests config save failed:', err);
+    throw err;
+  }
+}
+
+export function subscribeTestConfigs(
+  onUpdate: (tests: TestDefinition[]) => void
+): () => void {
+  onUpdate(readLocalTestConfigs());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'tests'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data?.tests) && data.tests.length > 0) {
+          writeLocalTestConfigs(data.tests);
+          onUpdate(data.tests);
+        }
+      }
+    },
+    (err) => {
+      console.warn('Firestore tests snapshot error:', err.code);
+    }
+  );
+
+  const ch = getChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'tests_update' && Array.isArray(ev.data.tests)) {
+      onUpdate(ev.data.tests);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_TESTS_KEY) {
+      onUpdate(readLocalTestConfigs());
     }
   };
   window.addEventListener('storage', handleStorage);

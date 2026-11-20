@@ -2,10 +2,13 @@ import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Download,
   ExternalLink,
+  Eye,
+  Lock,
   Maximize2,
   MessageSquare,
   Monitor,
@@ -14,6 +17,7 @@ import {
   ShieldAlert,
   Square,
   Trash2,
+  Unlock,
   Users,
   X,
   XCircle,
@@ -29,10 +33,13 @@ import {
   triggerGlobalTimer,
 } from '../services/courseService';
 import {
+  formatScheduledDateRu,
   removeSession,
   saveRoster,
+  saveTestConfigs,
   StudentSession,
   SyncStatus,
+  TestDefinition,
   ViolationEvent,
 } from '../services/telemetryService';
 
@@ -41,12 +48,14 @@ interface AdminDashboardProps {
   violations: ViolationEvent[];
   syncStatus: SyncStatus;
   roster: GroupRoster[];
+  tests: TestDefinition[];
   missions: Mission[];
   allSubmissions: MissionSubmission[];
   allFeedback: FeedbackEntry[];
   globalTimer: GlobalTimerState | null;
   adminLabel: string;
   onBackToPortal: () => void;
+  onEnterStudentView: () => void;
   onOpenSecondScreenInPlace: () => void;
 }
 
@@ -55,15 +64,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   violations,
   syncStatus,
   roster,
+  tests,
   missions,
   allSubmissions,
   allFeedback,
   globalTimer,
   adminLabel,
   onBackToPortal,
+  onEnterStudentView,
   onOpenSecondScreenInPlace,
 }) => {
-  const [activeTab, setActiveTab] = useState<'live' | 'course' | 'roster' | 'questions'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'schedule' | 'course' | 'roster' | 'questions'>('live');
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'violations'>(
     'all'
@@ -84,6 +95,108 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     'Завершить текущую миссию\nОтправить ссылку на GitHub'
   );
   const [timerMsg, setTimerMsg] = useState<string | null>(null);
+
+  // Test creation & schedule state
+  const [showNewTestForm, setShowNewTestForm] = useState(false);
+  const [newTestTitle, setNewTestTitle] = useState('');
+  const [newTestDesc, setNewTestDesc] = useState('');
+  const [newTestDuration, setNewTestDuration] = useState<number>(20);
+  const [newTestSections, setNewTestSections] = useState<string[]>([]);
+  const [testsSaveMsg, setTestsSaveMsg] = useState<string | null>(null);
+
+  const allQuestionSections = useMemo(
+    () => Array.from(new Set(QUESTIONS.map((q) => q.section))),
+    []
+  );
+
+  const persistTests = async (next: TestDefinition[], msg: string) => {
+    try {
+      await saveTestConfigs(next);
+      setTestsSaveMsg(msg);
+    } catch {
+      setTestsSaveMsg('Сохранено локально (проверьте права записи Firestore для настроек теста).');
+    }
+    window.setTimeout(() => setTestsSaveMsg(null), 4000);
+  };
+
+  const handleToggleGlobalTestLock = async (testId: string) => {
+    const target = tests.find((t) => t.id === testId);
+    if (!target) return;
+    const nextUnlocked = !target.isUnlocked;
+    const next = tests.map((t) => (t.id === testId ? { ...t, isUnlocked: nextUnlocked } : t));
+    await persistTests(
+      next,
+      nextUnlocked
+        ? `Тест «${target.title}» разблокирован для всех групп.`
+        : `Общая разблокировка теста «${target.title}» снята.`
+    );
+  };
+
+  const handleUpdateTestDuration = async (testId: string, minutes: number) => {
+    const clamped = Math.max(1, Math.min(180, Math.round(minutes) || 1));
+    const next = tests.map((t) => (t.id === testId ? { ...t, durationMinutes: clamped } : t));
+    await persistTests(next, `Таймер обновлён: ${clamped} мин.`);
+  };
+
+  const handleUpdateGroupSchedule = async (
+    testId: string,
+    groupName: string,
+    patch: { assigned?: boolean; scheduledAt?: string; unlocked?: boolean },
+    msg: string
+  ) => {
+    const next = tests.map((t) => {
+      if (t.id !== testId) return t;
+      const current = t.groupSchedules?.[groupName] || {
+        assigned: false,
+        scheduledAt: '',
+        unlocked: false,
+      };
+      return {
+        ...t,
+        groupSchedules: {
+          ...(t.groupSchedules || {}),
+          [groupName]: { ...current, ...patch },
+        },
+      };
+    });
+    await persistTests(next, msg);
+  };
+
+  const handleCreateTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newTestTitle.trim();
+    if (!title) return;
+    const selectedQIds =
+      newTestSections.length === 0
+        ? []
+        : QUESTIONS.filter((q) => newTestSections.includes(q.section)).map((q) => q.id);
+
+    const created: TestDefinition = {
+      id: `test_${Date.now()}`,
+      title,
+      description:
+        newTestDesc.trim() ||
+        `Тестовое задание (${selectedQIds.length || QUESTIONS.length} вопросов).`,
+      durationMinutes: Math.max(1, Math.min(180, Number(newTestDuration) || 20)),
+      questionIds: selectedQIds,
+      isUnlocked: false,
+      defaultScheduledAt: '',
+      groupSchedules: {},
+    };
+    const next = [...tests, created];
+    setNewTestTitle('');
+    setNewTestDesc('');
+    setNewTestDuration(20);
+    setNewTestSections([]);
+    setShowNewTestForm(false);
+    await persistTests(next, `Тест «${created.title}» создан (по умолчанию заблокирован).`);
+  };
+
+  const handleDeleteTest = async (testId: string) => {
+    if (tests.length <= 1) return;
+    const next = tests.filter((t) => t.id !== testId);
+    await persistTests(next, 'Тест удалён.');
+  };
 
   const missionTitleMap = useMemo(
     () => new Map(missions.map((m) => [m.id, m.title])),
@@ -266,6 +379,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onEnterStudentView}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-md border border-[#344656] bg-[#161F28] text-xs font-medium text-[#E6EDF3] hover:border-[#9ED164] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Eye className="w-4 h-4 text-[#E5A454]" />
+              <span>Войти как студент</span>
+            </button>
             <a
               href="?view=monitor"
               target="_blank"
@@ -301,6 +422,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               Тест: статистика и нарушения
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('schedule')}
+              className={`py-3.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                activeTab === 'schedule'
+                  ? 'border-[#9ED164] text-[#9ED164]'
+                  : 'border-transparent text-[#8EA0B0] hover:text-white'
+              }`}
+            >
+              Доступ и расписание тестов ({tests.length})
             </button>
             <button
               type="button"
@@ -508,8 +640,13 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                             onClick={() => setSelectedSession(s)}
                             className="hover:bg-[#1C2632] transition-colors cursor-pointer"
                           >
-                            <td className="py-3 px-4 font-semibold text-white">
-                              {s.studentName}
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-white">{s.studentName}</div>
+                              {s.testTitle && (
+                                <div className="text-[11px] text-[#7C8D9C] truncate max-w-[200px]">
+                                  {s.testTitle}
+                                </div>
+                              )}
                             </td>
                             <td className="py-3 px-4 text-[#9FB0C0]">{s.group}</td>
                             <td className="py-3 px-4">
@@ -523,7 +660,9 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                                 <span className="text-[#7CC4FA] font-medium">В процессе</span>
                               )}
                               {s.status === 'completed' && (
-                                <span className="text-[#9ED164] font-medium">Завершил</span>
+                                <span className="text-[#9ED164] font-medium">
+                                  {s.timedOut ? 'Завершил (таймер)' : 'Завершил'}
+                                </span>
                               )}
                             </td>
                             <td className="py-3 px-4 text-right font-mono tabular-nums text-[#D7E0E8]">
@@ -604,6 +743,354 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 1.5: Test Access, Group Scheduling & Timer */}
+        {activeTab === 'schedule' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Управление тестами, таймером и датами по группам
+                </h2>
+                <p className="text-xs text-[#9FB0C0] mt-0.5">
+                  По умолчанию тесты заблокированы. Назначьте дату проведения для каждой группы и нажимайте «Разблокировать», когда группа готова к началу работы.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewTestForm((v) => !v)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>{showNewTestForm ? 'Скрыть форму' : 'Добавить новый тест'}</span>
+              </button>
+            </div>
+
+            {testsSaveMsg && (
+              <div className="p-3 rounded-lg border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
+                {testsSaveMsg}
+              </div>
+            )}
+
+            {showNewTestForm && (
+              <form
+                onSubmit={handleCreateTest}
+                className="p-5 rounded-xl border border-[#344656] bg-[#161E27] space-y-4"
+              >
+                <h3 className="text-sm font-bold text-white">Создание нового теста</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                      Название теста
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newTestTitle}
+                      onChange={(e) => setNewTestTitle(e.target.value)}
+                      placeholder="Например: Рубежный контроль №2 — Физика и UI"
+                      className="w-full bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                      Таймер на прохождение (мин)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={180}
+                      value={newTestDuration}
+                      onChange={(e) => setNewTestDuration(Number(e.target.value) || 20)}
+                      className="w-full bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-[#9ED164]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                    Описание для студентов
+                  </label>
+                  <input
+                    type="text"
+                    value={newTestDesc}
+                    onChange={(e) => setNewTestDesc(e.target.value)}
+                    placeholder="Кратко укажите темы, входящие в этот тест"
+                    className="w-full bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
+                  />
+                </div>
+
+                <div>
+                  <div className="text-xs font-mono text-[#8EA0B0] mb-2">
+                    Разделы вопросов (если не выбрано ничего — включаются все {QUESTIONS.length} заданий)
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {allQuestionSections.map((sec) => {
+                      const checked = newTestSections.includes(sec);
+                      return (
+                        <button
+                          key={sec}
+                          type="button"
+                          onClick={() =>
+                            setNewTestSections((prev) =>
+                              prev.includes(sec) ? prev.filter((s) => s !== sec) : [...prev, sec]
+                            )
+                          }
+                          className={`px-3 py-2 rounded-md border text-left text-xs transition-colors cursor-pointer ${
+                            checked
+                              ? 'bg-[#213124] border-[#9ED164] text-[#CBEF9C]'
+                              : 'bg-[#11171D] border-[#24303C] text-[#9FB0C0] hover:border-[#45586B]'
+                          }`}
+                        >
+                          {sec}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewTestForm(false)}
+                    className="px-4 py-2 rounded-md border border-[#344656] text-xs text-[#9FB0C0] hover:text-white cursor-pointer"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-md bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] cursor-pointer"
+                  >
+                    Создать тест
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="space-y-5">
+              {tests.map((test) => {
+                const qCount =
+                  test.questionIds.length > 0 ? test.questionIds.length : QUESTIONS.length;
+
+                return (
+                  <div
+                    key={test.id}
+                    className="rounded-xl border border-[#2A3744] bg-[#161E27] overflow-hidden"
+                  >
+                    <div className="p-5 border-b border-[#24303C] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="space-y-1 max-w-2xl">
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                          <span className="text-[#9ED164]">{qCount} заданий</span>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            className={
+                              test.isUnlocked ? 'text-[#9ED164]' : 'text-[#E5A454]'
+                            }
+                          >
+                            {test.isUnlocked
+                              ? 'Открыт для всех групп'
+                              : 'Общий доступ закрыт (по расписанию / кнопке)'}
+                          </span>
+                        </div>
+                        <h3 className="text-base font-bold text-white">{test.title}</h3>
+                        <p className="text-xs text-[#9FB0C0]">{test.description}</p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 shrink-0">
+                        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-[#2A3744] bg-[#11171D] text-xs">
+                          <Clock className="w-3.5 h-3.5 text-[#E5A454]" />
+                          <span className="text-[#8EA0B0]">Таймер (мин):</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={180}
+                            value={test.durationMinutes}
+                            onChange={(e) =>
+                              handleUpdateTestDuration(test.id, Number(e.target.value))
+                            }
+                            className="w-14 bg-[#0F141A] border border-[#344656] rounded px-2 py-0.5 text-xs font-mono text-white text-center focus:outline-none focus:border-[#9ED164]"
+                          />
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGlobalTestLock(test.id)}
+                          className={`inline-flex items-center gap-2 px-4 py-2 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                            test.isUnlocked
+                              ? 'border border-[#E5A454] bg-[#251E15] text-[#F3D3A7] hover:bg-[#33291D]'
+                              : 'bg-[#9ED164] text-[#111912] hover:bg-[#B4E07F]'
+                          }`}
+                        >
+                          {test.isUnlocked ? (
+                            <>
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>Заблокировать для всех</span>
+                            </>
+                          ) : (
+                            <>
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>Разблокировать для всех</span>
+                            </>
+                          )}
+                        </button>
+
+                        {tests.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTest(test.id)}
+                            title="Удалить тест"
+                            className="p-2 rounded-md border border-[#2A3744] text-[#7C8D9C] hover:text-[#E06C75] hover:border-[#E06C75]/40 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Per-group schedule table */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-[#24303C] bg-[#121820] text-[11px] font-mono text-[#8EA0B0]">
+                            <th className="py-2.5 px-5 font-medium">Группа</th>
+                            <th className="py-2.5 px-4 font-medium">Назначить тест</th>
+                            <th className="py-2.5 px-4 font-medium">Дата и время проведения</th>
+                            <th className="py-2.5 px-4 font-medium">Как видит студент</th>
+                            <th className="py-2.5 px-5 font-medium text-right">Доступ</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#1F2A35] text-xs">
+                          {roster.map((grp) => {
+                            const gs = test.groupSchedules?.[grp.name] || {
+                              assigned: false,
+                              scheduledAt: '',
+                              unlocked: false,
+                            };
+                            const isOpenForGroup = test.isUnlocked || gs.unlocked;
+
+                            return (
+                              <tr key={grp.id} className="hover:bg-[#1A2430]">
+                                <td className="py-3 px-5 font-semibold text-white">
+                                  {grp.name}
+                                </td>
+                                <td className="py-3 px-4">
+                                  <label className="inline-flex items-center gap-2 cursor-pointer text-[#D7E0E8]">
+                                    <input
+                                      type="checkbox"
+                                      checked={gs.assigned}
+                                      onChange={(e) =>
+                                        handleUpdateGroupSchedule(
+                                          test.id,
+                                          grp.name,
+                                          { assigned: e.target.checked },
+                                          e.target.checked
+                                            ? `Тест назначен группе «${grp.name}».`
+                                            : `Назначение для группы «${grp.name}» снято.`
+                                        )
+                                      }
+                                      className="accent-[#9ED164] w-4 h-4 rounded"
+                                    />
+                                    <span>Показывать в расписании</span>
+                                  </label>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <CalendarClock className="w-3.5 h-3.5 text-[#8EA0B0] shrink-0" />
+                                    <input
+                                      type="datetime-local"
+                                      value={gs.scheduledAt}
+                                      onChange={(e) =>
+                                        handleUpdateGroupSchedule(
+                                          test.id,
+                                          grp.name,
+                                          {
+                                            assigned: e.target.value ? true : gs.assigned,
+                                            scheduledAt: e.target.value,
+                                          },
+                                          e.target.value
+                                            ? `Дата для «${grp.name}» установлена: ${formatScheduledDateRu(e.target.value)}`
+                                            : `Дата для «${grp.name}» очищена.`
+                                        )
+                                      }
+                                      className="bg-[#0F141A] border border-[#344656] rounded px-2.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-[#9ED164]"
+                                    />
+                                    {gs.scheduledAt && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleUpdateGroupSchedule(
+                                            test.id,
+                                            grp.name,
+                                            { scheduledAt: '' },
+                                            `Дата для «${grp.name}» сброшена.`
+                                          )
+                                        }
+                                        className="text-[#7C8D9C] hover:text-white cursor-pointer"
+                                        title="Очистить дату"
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 font-mono text-[11px]">
+                                  {isOpenForGroup ? (
+                                    <span className="text-[#9ED164]">
+                                      Открыт{gs.scheduledAt ? ` (${formatScheduledDateRu(gs.scheduledAt)})` : ''}
+                                    </span>
+                                  ) : gs.scheduledAt ? (
+                                    <span className="text-[#E5A454]">
+                                      Будет {formatScheduledDateRu(gs.scheduledAt)} (Закрыт)
+                                    </span>
+                                  ) : (
+                                    <span className="text-[#7C8D9C]">Заблокирован</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-5 text-right">
+                                  <button
+                                    type="button"
+                                    disabled={test.isUnlocked}
+                                    onClick={() =>
+                                      handleUpdateGroupSchedule(
+                                        test.id,
+                                        grp.name,
+                                        { unlocked: !gs.unlocked },
+                                        !gs.unlocked
+                                          ? `Доступ для группы «${grp.name}» разблокирован.`
+                                          : `Доступ для группы «${grp.name}» закрыт.`
+                                      )
+                                    }
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                                      gs.unlocked
+                                        ? 'border border-[#E5A454]/60 bg-[#251E15] text-[#F3D3A7] hover:bg-[#33291D]'
+                                        : 'bg-[#213124] border border-[#5D8247] text-[#CBEF9C] hover:bg-[#9ED164] hover:text-[#111912]'
+                                    }`}
+                                  >
+                                    {gs.unlocked ? (
+                                      <>
+                                        <Lock className="w-3 h-3" />
+                                        <span>Закрыть</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Unlock className="w-3 h-3" />
+                                        <span>Разблокировать</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

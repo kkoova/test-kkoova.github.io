@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft, Clock } from 'lucide-react';
 import { TestGradeResult } from '../data/questions';
 
 interface FinalResultsViewProps {
   studentName: string;
   group: string;
+  testTitle?: string;
+  timedOut?: boolean;
   violationsCount: number;
   result: TestGradeResult;
   onExitToHome: () => void;
@@ -13,6 +15,8 @@ interface FinalResultsViewProps {
 export const FinalResultsView: React.FC<FinalResultsViewProps> = ({
   studentName,
   group,
+  testTitle,
+  timedOut = false,
   violationsCount,
   result,
   onExitToHome,
@@ -28,18 +32,28 @@ export const FinalResultsView: React.FC<FinalResultsViewProps> = ({
   return (
     <div className="py-8 px-4">
       <div className="max-w-4xl mx-auto space-y-6">
+        {timedOut && (
+          <div className="p-4 rounded-xl border border-[#E5A454]/60 bg-[#251E15] text-xs text-[#F3D3A7] flex items-center gap-3">
+            <Clock className="w-5 h-5 text-[#E5A454] shrink-0" />
+            <div>
+              <strong className="text-white">Время тестирования истекло.</strong> Тест был
+              автоматически завершён по таймеру, все выбранные ответы засчитаны и проверены.
+            </div>
+          </div>
+        )}
+
         <section className="rounded-xl border border-[#2A3744] bg-[#161E27] p-6 sm:p-8">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#26323F] pb-6 mb-6">
             <div>
-              <div className="flex items-center gap-2 text-xs font-mono text-[#9ED164] mb-1.5">
-                <span>Тест завершён</span>
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-[#9ED164] mb-1.5">
+                <span>{timedOut ? 'Завершено по таймеру' : 'Тест завершён'}</span>
                 <span aria-hidden="true">·</span>
                 <span>{group}</span>
                 <span aria-hidden="true">·</span>
                 <span>{studentName}</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-bold text-[#F1F6FA]">
-                Результаты проверки
+                {testTitle ? `Результаты: ${testTitle}` : 'Результаты проверки'}
               </h1>
             </div>
 
