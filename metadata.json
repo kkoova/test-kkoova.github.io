@@ -1,0 +1,6 @@
+{
+  "name": "Mobile Godot — Курс и тестирование",
+  "description": "Единый образовательный портал по разработке мобильных игр на Godot Engine: карта миссий, методические материалы, тестирование и мониторинг в реальном времени.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
