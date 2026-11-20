@@ -1,0 +1,399 @@
+<html lang="ru"><head><script src="chrome-extension://nimlmejbmnecnaghgmbahmbaddhjbecg/content/location/location.js" id="nimlmejbmnecnaghgmbahmbaddhjbecg"></script><script src="chrome-extension://nimlmejbmnecnaghgmbahmbaddhjbecg/content/location/location.js" id="nimlmejbmnecnaghgmbahmbaddhjbecg"></script><script src="chrome-extension://nimlmejbmnecnaghgmbahmbaddhjbecg/content/location/location.js" id="nimlmejbmnecnaghgmbahmbaddhjbecg"></script><script src="chrome-extension://nimlmejbmnecnaghgmbahmbaddhjbecg/content/location/location.js" id="nimlmejbmnecnaghgmbahmbaddhjbecg"></script><script src="chrome-extension://nimlmejbmnecnaghgmbahmbaddhjbecg/content/location/location.js" id="nimlmejbmnecnaghgmbahmbaddhjbecg"></script>
+<meta charset="UTF-8">
+</head><body><style>
+body {
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: #f5f7fa;
+  margin: 0;
+  color: #222;
+  line-height: 1.6;
+}
+
+header {
+  background: linear-gradient(135deg,#2c3e50,#34495e);
+  color:#fff;
+  padding:30px;
+}
+
+header h1{
+  margin:0;
+  font-size:28px;
+}
+
+main{
+  max-width:1000px;
+  margin:auto;
+  padding:30px;
+}
+
+section{
+  background:#fff;
+  border-radius:10px;
+  padding:25px;
+  margin-bottom:30px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.06);
+}
+
+h2,h3{
+  color:#2c3e50;
+}
+
+code,pre{
+  background:#1e1e1e;
+  color:#dcdcdc;
+  padding:12px;
+  border-radius:6px;
+  display:block;
+  margin:10px 0;
+}
+
+button{
+  background:#3498db;
+  color:#fff;
+  border:none;
+  padding:12px 20px;
+  border-radius:6px;
+  cursor:pointer;
+}
+
+button:hover{
+  background:#2980b9;
+}
+
+.hint{
+  background:#eef6ff;
+  border-left:5px solid #3498db;
+  padding:15px;
+  border-radius:6px;
+}
+
+footer{
+  text-align:center;
+  padding:20px;
+  color:#666;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+}
+
+th, td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: center;
+}
+
+th {
+  background: #ecf0f1;
+}
+
+
+.passwordInput {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.checkBtn {
+  padding: 8px 16px;
+  background-color: #2196F3;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.checkBtn:hover {
+  background-color: #1976D2;
+}
+
+/* состояния */
+.task.success {
+  background-color: #8fd792;
+  color: white;
+}
+
+.task.error {
+  background-color: lightcoral;
+  color: white;
+}
+</style>
+<meta content="extension" property="gosuslugi.plugin.extension.content">
+
+
+
+<header>
+<h1>Лабораторная работа №7</h1>
+<p>Тестирование веб-приложения на проникновение методом полного перебора - Тренировка</p>
+</header>
+
+<main>
+
+<section>
+<h2>1. Цель работы</h2>
+
+<p>Закрепить полученые в 6 лаб навыки тестирования веб-приложения на устойчивость к
+атакам методом полного перебора (brute-force).
+</p><p>Содержание отчета</p>
+
+<ul>
+<li>Титульный лист</li>
+<li>Задание </li>
+<li>Тренировка</li>
+
+</ul>
+
+<div class="hint">Внимание! За несвоевременное представление работы на проверку оценка снижается на 1 балл!
+</div>
+
+</section>
+
+
+
+
+
+
+
+
+<section>
+
+<h2>2. Начало работы</h2>
+  
+<div class="hint" style="
+    border-left: 5px solid #d72a2a;
+    background: lightcoral;
+">! ВНИМАНИЕ: DVWA не эмулирует уязвимости веб-приложений, уязвимости
+внутри DVWA являются настоящими, поэтому работайте с ним только на
+виртуальной машине. Не загружайте его на любой сервер, имеющий выход в
+Интернет.
+</div>
+  
+  
+<h3>Шаг 1. Запустите приложение DVWA</h3>
+
+<pre>sudo docker run docker.io/vulnerables/web-dvwa:latest </pre><p>Отчет офорляйте по типу:<br>1. Команда для нахождения пароля<br>2.Скриншот правильного выполнения на данной странице
+</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="hint">После Create / Reset Database, выполните:</div><pre>sudo docker ps
+</pre><p>Найдите значение NAMES и вставте его после запуска:</p><pre>bash &lt;(curl -s https://kkoova.github.io/settLab7.sh)
+</pre></section>
+<section>
+
+<h2>3. Выполните варианты ниже (по примеру 6 лабораторнй работы)</h2>
+  
+
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="hint">Отчет офорляйте по типу:
+</div><p>1. Команда для нахождения пароля + найденый пароль<br>2.Скриншот правильного выполнения на данной странице (зеленый блок)
+<br>3.Скриншот упешной авторизации в brute forse (DVWA). Пример ниже:
+</p><img src="https://kkoova.github.io/assets/l66-4.png" style="
+    WIDTH: 100%;
+"></section><section data-hash="1c8bfe8f801d79745c4631d09fff36c82aa37fc4cce4fc946683d7b336b63032" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "pablo"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="6ca13d52ca70c883e0f0bb101e425a89e8624de51db2d2392593af6a84118090" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "gordonb"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "smithy"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="cfe6a8b0e4e0de6ea50d90edec658e83c4d99bc277d437aaae06e6f2dfd60352" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "1337"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+
+<section data-hash="b587ba7df64e6fc3aa57b0c9fa99d1e1437cfc66952fc33cc3c5984443dcbe3e" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите логин для пароля: "good-luck"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="30152252234e6da483c8dc1c045d396232728067c8adba0acc97a9151aa6972b" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите логин для пароля: "Freddy"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="770e607624d689265ca6c44884d0807d9b054d23c473c106c72be9de08b7376c" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "nike"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="fb5c9d2cf0b916ef699ed346ada794721b2c9f5b20bcbd9b4fc556423c538677" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите логин для пароля: "robocop"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+<section data-hash="ef58ef3c1e321df6d41ed2fd179df253ccd966a3212cb97eedf9b369334786af" class="task">
+  <h3 style="
+    margin-top: -6;
+">Найдите пароль для пользователя: "disco"</h3>
+  <input type="password" class="passwordInput" placeholder="Введите пароль">
+  <button class="checkBtn" style="
+    width: 100%;
+">Проверить</button>
+</section>
+
+<section>
+
+<h2>4. Создайте своего пользователя с логином и паролем, а после взломайте его!</h2>
+  
+
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<pre>sudo docker ps
+</pre><p>Заполните и выполните команду ниже, подсказка:<br><br>NAME_ИЗ_SUDO_DOCKER_PS - NAMES из команды выше<br>
+ТУТ_10_И_ВЫШЕ - id пользователя (10 и выше) - не должно повторяться<br>
+ИМЯ_ЧТО_ВЫ_ПРИДУМАЕТЕ - логин для пользователя<br>
+ПАРОЛЬ_ЧТО_ВЫ_ПРИДУМАЕТЕ - пароль что вы придумаете<br>
+ССЫЛКА_НА_ЛЮБОЕ_ИЗОБРАЖЕНИЕ_ИЗ_ИНТЕРНЕРА - ссылка на изображения типа: https://cdn-icons-png.flaticon.com/512/185/185538.png</p><div class="hint">sudo docker exec -it NAME_ИЗ_SUDO_DOCKER_PS mysql -u root -p'p@ssword' -e "INSERT INTO dvwa.users (user_id, first_name, last_name, user, password, avatar) VALUES (ТУТ_10_И_ВЫШЕ, 'Test1', 'User1', 'ИМЯ_ЧТО_ВЫ_ПРИДУМАЕТЕ', MD5('ПАРОЛЬ_ЧТО_ВЫ_ПРИДУМАЕТЕ'), 'ССЫЛКА_НА_ЛЮБОЕ_ИЗОБРАЖЕНИЕ_ИЗ_ИНТЕРНЕРА');"
+</div><br><div class="hint">После выполнения, выполните взлом данного пользователя по логину или паролю. В отчет прикрепите команду на создание пользователя (скриншот с итогом) и скриншот успешной авторизации по этим данным в brute forse
+</div></section></main>
+
+<footer>Лабораторная работа №7</footer>
+
+<script>async function sha256(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+document.querySelectorAll(".checkBtn").forEach(btn => {
+  btn.addEventListener("click", async function() {
+    const section = this.closest(".task");
+    const input = section.querySelector(".passwordInput").value;
+    const correctHash = section.dataset.hash;
+
+    const hash = await sha256(input);
+
+    section.classList.remove("success", "error");
+
+    if (hash === correctHash) {
+      section.classList.add("success");
+    } else {
+      section.classList.add("error");
+    }
+  });
+})
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</body></html>

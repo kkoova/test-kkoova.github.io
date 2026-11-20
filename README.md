@@ -1,0 +1,7 @@
+# Интерактивная система обучения (ИСО)
+
+## Сожержит образовательные программы по таким предметам как:
+- [Информационная безопасность](https://kkoova.github.io/invobez/)
+- [Мобильная разработка](https://kkoova.github.io/mobile)
+- [Федеральный проект "Код будущего"](https://kkoova.github.io/cod-budushego/)
+- [Введение в специальность](https://kkoova.github.io/it-course/)
