@@ -1,0 +1,6 @@
+{
+  "name": "Godot System Check",
+  "description": "Интерактивное тестирование по Godot Engine с проверкой результатов и мониторингом нарушений в реальном времени.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
