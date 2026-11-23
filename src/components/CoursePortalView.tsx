@@ -13,14 +13,20 @@ import {
   X,
 } from 'lucide-react';
 import { Mission, MissionSubmission, submitMissionReport } from '../services/courseService';
+import { GroupRoster } from '../data/defaultRoster';
+import { ProjectGuideConfig } from '../services/telemetryService';
+import { ProjectGuideBanner } from './ProjectGuideView';
 
 interface CoursePortalViewProps {
   missions: Mission[];
   submissions: MissionSubmission[];
   user: User | null;
   fallbackName: string;
+  projectGuide: ProjectGuideConfig;
+  roster: GroupRoster[];
   onOpenLesson: (tutorialDoc: string) => void;
   onOpenTest: () => void;
+  onOpenProjectGuide: () => void;
 }
 
 const STEPS_STORAGE_KEY = 'mobile_godot_steps_progress_v1';
@@ -39,8 +45,11 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
   submissions,
   user,
   fallbackName,
+  projectGuide,
+  roster,
   onOpenLesson,
   onOpenTest,
+  onOpenProjectGuide,
 }) => {
   const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
   const [activeMission, setActiveMission] = useState<Mission | null>(null);
@@ -207,6 +216,13 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
           </div>
         </div>
       </section>
+
+      {/* Prominent Semester 1 Project Defense Guide Banner */}
+      <ProjectGuideBanner
+        guide={projectGuide}
+        roster={roster}
+        onOpenGuide={onOpenProjectGuide}
+      />
 
       {/* VIEW 1: Clean Cards Grid */}
       {viewMode === 'grid' && (

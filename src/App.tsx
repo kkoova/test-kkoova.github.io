@@ -6,17 +6,21 @@ import { GroupRoster } from './data/defaultRoster';
 import {
   gradeTest,
   Question,
-  QUESTIONS,
   TestGradeResult,
   UserAnswerValue,
 } from './data/questions';
 import {
   completeSession,
   createOrStartSession,
+  ProjectGuideConfig,
+  readLocalProjectGuide,
+  readLocalQuestions,
   readLocalRoster,
   readLocalTestConfigs,
   recordViolation,
   StudentSession,
+  subscribeProjectGuide,
+  subscribeQuestions,
   subscribeRoster,
   subscribeTelemetry,
   subscribeTestConfigs,
@@ -48,9 +52,11 @@ import { SecondScreenMonitor } from './components/SecondScreenMonitor';
 import { GlobalTimerOverlay } from './components/GlobalTimerOverlay';
 import { ProfileModal } from './components/ProfileModal';
 import { FeedbackModal } from './components/FeedbackModal';
+import { ProjectGuideBanner, ProjectGuideView } from './components/ProjectGuideView';
 
 type AppView =
   | 'course'
+  | 'project'
   | 'lesson'
   | 'test_start'
   | 'test_active'
@@ -115,9 +121,13 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
-  // Roster, Tests Catalog & Telemetry state
+  // Roster, Tests Catalog, Live Questions, Project Guide & Telemetry state
   const [roster, setRoster] = useState<GroupRoster[]>(() => readLocalRoster());
   const [tests, setTests] = useState<TestDefinition[]>(() => readLocalTestConfigs());
+  const [questions, setQuestions] = useState<Question[]>(() => readLocalQuestions());
+  const [projectGuide, setProjectGuide] = useState<ProjectGuideConfig>(() =>
+    readLocalProjectGuide()
+  );
   const [preselectedTestId, setPreselectedTestId] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<StudentSession[]>([]);
@@ -128,7 +138,7 @@ export default function App() {
 
   // Active Student Test state
   const [activeTest, setActiveTest] = useState<TestDefinition | null>(null);
-  const [activeQuestions, setActiveQuestions] = useState<Question[]>(QUESTIONS);
+  const [activeQuestions, setActiveQuestions] = useState<Question[]>(() => readLocalQuestions());
   const [activeSession, setActiveSession] = useState<StudentSession | null>(null);
   const [currentIdx, setCurrentIdx] = useState<number>(0);
   const [answers, setAnswers] = useState<Record<number, UserAnswerValue>>({});
@@ -143,7 +153,7 @@ export default function App() {
   }>({ open: false, reason: '', count: 0 });
 
   const activeSessionRef = useRef<StudentSession | null>(null);
-  const activeQuestionsRef = useRef<Question[]>(QUESTIONS);
+  const activeQuestionsRef = useRef<Question[]>(questions);
   const answersRef = useRef<Record<number, UserAnswerValue>>({});
   const currentIdxRef = useRef<number>(0);
   const lastViolationMsRef = useRef<number>(0);
@@ -187,13 +197,17 @@ export default function App() {
     return subscribeGlobalTimer(setGlobalTimer);
   }, []);
 
-  // 4. Subscribe to Student Roster & Test Configurations
+  // 4. Subscribe to Student Roster, Test Configurations, Questions & Project Guide
   useEffect(() => {
     const unsubRoster = subscribeRoster(setRoster);
     const unsubTests = subscribeTestConfigs(setTests);
+    const unsubQuestions = subscribeQuestions(setQuestions);
+    const unsubProjectGuide = subscribeProjectGuide(setProjectGuide);
     return () => {
       unsubRoster();
       unsubTests();
+      unsubQuestions();
+      unsubProjectGuide();
     };
   }, []);
 
@@ -404,9 +418,9 @@ export default function App() {
 
     const qList =
       test.questionIds.length > 0
-        ? QUESTIONS.filter((q) => test.questionIds.includes(q.id))
-        : QUESTIONS;
-    const finalQuestions = qList.length > 0 ? qList : QUESTIONS;
+        ? questions.filter((q) => test.questionIds.includes(q.id))
+        : questions;
+    const finalQuestions = qList.length > 0 ? qList : questions;
     const durationMin = Math.max(1, test.durationMinutes || 25);
     const deadlineMs = Date.now() + durationMin * 60 * 1000;
 
@@ -549,6 +563,8 @@ export default function App() {
           syncStatus={syncStatus}
           roster={roster}
           tests={tests}
+          questions={questions}
+          projectGuide={projectGuide}
           missions={missions}
           allSubmissions={allSubmissions}
           allFeedback={allFeedback}
@@ -557,6 +573,7 @@ export default function App() {
           onBackToPortal={() => setView('course')}
           onEnterStudentView={toggleStudentPreview}
           onOpenSecondScreenInPlace={() => setView('monitor')}
+          onOpenProjectGuide={() => setView('project')}
         />
       </>
     );
@@ -717,9 +734,13 @@ export default function App() {
     );
   }
 
-  // 4. Unified Portal Shell (Start Page, Course Map, Lesson Reader, Test Start, Test Results)
+  // 4. Unified Portal Shell (Start Page, Course Map, Project Guide, Lesson Reader, Test Start, Test Results)
   const activeHeaderSection =
-    view === 'test_start' || view === 'test_completed' ? 'test' : 'course';
+    view === 'project'
+      ? 'project'
+      : view === 'test_start' || view === 'test_completed'
+        ? 'test'
+        : 'course';
 
   return (
     <div className="min-h-screen bg-[#0F141A] text-[#E6EDF3] flex flex-col">
@@ -728,7 +749,7 @@ export default function App() {
       <PortalHeader
         activeSection={activeHeaderSection}
         onNavigate={(sec) => {
-          setView(sec === 'test' ? 'test_start' : 'course');
+          setView(sec === 'test' ? 'test_start' : sec === 'project' ? 'project' : 'course');
         }}
         isSignedIn={isSignedIn}
         isAdmin={isAdmin}
@@ -748,9 +769,15 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1">
-        {/* Start Page when not signed in: Login + Locked/Scheduled Tests */}
-        {view === 'course' && !isSignedIn && authInitialized ? (
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-12">
+        {view === 'project' ? (
+          <ProjectGuideView
+            guide={projectGuide}
+            roster={roster}
+            isAdmin={isAdmin}
+            onBack={() => setView('course')}
+          />
+        ) : view === 'course' && !isSignedIn && authInitialized ? (
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-12 space-y-8">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               {/* Left 5 cols: GitHub Login Card */}
               <div className="lg:col-span-5 rounded-xl border border-[#2A3744] bg-[#161E27] p-7 sm:p-8 space-y-5 shadow-xl">
@@ -794,7 +821,7 @@ export default function App() {
 
                 <TestCatalogGrid
                   tests={tests}
-                  totalAvailableQuestions={QUESTIONS.length}
+                  totalAvailableQuestions={questions.length}
                   onSelectTest={(t) => {
                     setPreselectedTestId(t.id);
                     setView('test_start');
@@ -802,6 +829,12 @@ export default function App() {
                 />
               </div>
             </div>
+
+            <ProjectGuideBanner
+              guide={projectGuide}
+              roster={roster}
+              onOpenGuide={() => setView('project')}
+            />
           </div>
         ) : view === 'course' ? (
           missionsError ? (
@@ -814,12 +847,15 @@ export default function App() {
               submissions={userSubmissions}
               user={firebaseUser}
               fallbackName={userLabel}
+              projectGuide={projectGuide}
+              roster={roster}
               onOpenLesson={(docUrl) => {
                 setActiveDoc(docUrl);
                 setView('lesson');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onOpenTest={() => setView('test_start')}
+              onOpenProjectGuide={() => setView('project')}
             />
           )
         ) : view === 'lesson' ? (
@@ -846,7 +882,7 @@ export default function App() {
           <StartScreen
             tests={tests}
             roster={roster}
-            totalQuestions={QUESTIONS.length}
+            totalQuestions={questions.length}
             initialTestId={preselectedTestId}
             defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
             onStartTest={handleStartTest}

@@ -11,7 +11,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DEFAULT_ROSTER, GroupRoster } from '../data/defaultRoster';
-import { TestGradeResult } from '../data/questions';
+import { Question, QUESTIONS, TestGradeResult } from '../data/questions';
 
 export type ViolationType =
   | 'visibility_hidden'
@@ -77,10 +77,37 @@ export interface StudentSession {
 
 export type SyncStatus = 'connecting' | 'connected' | 'permission_denied' | 'error';
 
+export interface GroupDefenseDate {
+  date: string;
+  note: string;
+}
+
+export interface ProjectGuideConfig {
+  semesterTitle: string;
+  slidesRange: string;
+  pitchDuration: string;
+  overview: string;
+  teacherNote: string;
+  groupDates: Record<string, GroupDefenseDate>;
+}
+
+export const DEFAULT_PROJECT_GUIDE: ProjectGuideConfig = {
+  semesterTitle: 'Итоговая защита проекта · 1 семестр',
+  slidesRange: '8–10 слайдов',
+  pitchDuration: '5–7 мин доклад + 2–3 мин вопросы',
+  overview:
+    'В конце 1 семестра каждый студент (или мини-команда) представляет идею собственного мобильного приложения или игры и демонстрирует первые рабочие наработки: прототип сцен, макеты экранов и базовую логику.',
+  teacherNote:
+    'На защите в 1 семестре оцениваются ясность идеи, продуманность пользовательского сценария, качество оформления презентации и наличие первых наработок (скриншоты, прототип или эскизы). Готовая финальная игра не требуется — важен уверенный старт и план на 2 семестр.',
+  groupDates: {},
+};
+
 const LOCAL_SESSIONS_KEY = 'godot_test_local_sessions_v1';
 const LOCAL_VIOLATIONS_KEY = 'godot_test_local_violations_v1';
 const LOCAL_ROSTER_KEY = 'godot_test_local_roster_v1';
 const LOCAL_TESTS_KEY = 'godot_test_local_configs_v1';
+const LOCAL_PROJECT_GUIDE_KEY = 'godot_project_guide_v1';
+const LOCAL_QUESTIONS_KEY = 'godot_test_local_questions_v1';
 const CHANNEL_NAME = 'godot_test_telemetry_v1';
 
 export const DEFAULT_TESTS: TestDefinition[] = [
@@ -536,6 +563,175 @@ export function subscribeTestConfigs(
   const handleStorage = (ev: StorageEvent) => {
     if (ev.key === LOCAL_TESTS_KEY) {
       onUpdate(readLocalTestConfigs());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export function readLocalProjectGuide(): ProjectGuideConfig {
+  try {
+    const raw = localStorage.getItem(LOCAL_PROJECT_GUIDE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return { ...DEFAULT_PROJECT_GUIDE, ...parsed };
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return DEFAULT_PROJECT_GUIDE;
+}
+
+function writeLocalProjectGuide(guide: ProjectGuideConfig) {
+  try {
+    localStorage.setItem(LOCAL_PROJECT_GUIDE_KEY, JSON.stringify(guide));
+    getChannel()?.postMessage({ kind: 'project_guide_update', guide });
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveProjectGuide(guide: ProjectGuideConfig): Promise<void> {
+  writeLocalProjectGuide(guide);
+  try {
+    await setDoc(doc(db, 'godot_test_config', 'project_guide'), {
+      ...guide,
+      updatedAtMs: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Firestore project guide save failed:', err);
+    throw err;
+  }
+}
+
+export function subscribeProjectGuide(
+  onUpdate: (guide: ProjectGuideConfig) => void
+): () => void {
+  onUpdate(readLocalProjectGuide());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'project_guide'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as Partial<ProjectGuideConfig>;
+        const merged: ProjectGuideConfig = {
+          ...DEFAULT_PROJECT_GUIDE,
+          ...data,
+          groupDates: data.groupDates || {},
+        };
+        writeLocalProjectGuide(merged);
+        onUpdate(merged);
+      }
+    },
+    (err) => {
+      console.warn('Firestore project guide snapshot error:', err.code);
+    }
+  );
+
+  const ch = getChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'project_guide_update' && ev.data.guide) {
+      onUpdate(ev.data.guide);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_PROJECT_GUIDE_KEY) {
+      onUpdate(readLocalProjectGuide());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export function readLocalQuestions(): Question[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_QUESTIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as Question[];
+    }
+  } catch {
+    // fallback
+  }
+  return QUESTIONS;
+}
+
+function writeLocalQuestions(questions: Question[]) {
+  try {
+    localStorage.setItem(LOCAL_QUESTIONS_KEY, JSON.stringify(questions));
+    getChannel()?.postMessage({ kind: 'questions_update', questions });
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveQuestions(questions: Question[]): Promise<void> {
+  writeLocalQuestions(questions);
+  try {
+    await setDoc(doc(db, 'godot_test_config', 'questions'), {
+      questionsJson: JSON.stringify(questions),
+      count: questions.length,
+      updatedAtMs: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Firestore questions save failed:', err);
+    throw err;
+  }
+}
+
+export function subscribeQuestions(
+  onUpdate: (questions: Question[]) => void
+): () => void {
+  onUpdate(readLocalQuestions());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'questions'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data?.questionsJson === 'string') {
+          try {
+            const parsed = JSON.parse(data.questionsJson);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              writeLocalQuestions(parsed);
+              onUpdate(parsed);
+            }
+          } catch {
+            // ignore malformed JSON
+          }
+        }
+      }
+    },
+    (err) => {
+      console.warn('Firestore questions snapshot error:', err.code);
+    }
+  );
+
+  const ch = getChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'questions_update' && Array.isArray(ev.data.questions)) {
+      onUpdate(ev.data.questions);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_QUESTIONS_KEY) {
+      onUpdate(readLocalQuestions());
     }
   };
   window.addEventListener('storage', handleStorage);

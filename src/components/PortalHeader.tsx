@@ -1,7 +1,7 @@
 import React from 'react';
 import { Eye, LogIn, LogOut, Monitor, ShieldCheck, Users } from 'lucide-react';
 
-export type PortalSection = 'course' | 'test';
+export type PortalSection = 'course' | 'project' | 'test';
 
 interface PortalHeaderProps {
   activeSection: PortalSection;
@@ -107,6 +107,17 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
             }`}
           >
             {isSignedIn ? 'Карта миссий' : 'Главная и вход'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('project')}
+            className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeSection === 'project'
+                ? 'border-[#9ED164] text-[#F1F6FA]'
+                : 'border-transparent hover:text-white'
+            }`}
+          >
+            Защита проекта
           </button>
           <button
             type="button"
@@ -228,6 +239,15 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
           }`}
         >
           {isSignedIn ? 'Карта миссий' : 'Главная и вход'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('project')}
+          className={`whitespace-nowrap shrink-0 cursor-pointer ${
+            activeSection === 'project' ? 'text-[#9ED164] font-semibold' : ''
+          }`}
+        >
+          Защита проекта
         </button>
         <button
           type="button"

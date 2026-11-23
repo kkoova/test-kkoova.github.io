@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   CalendarClock,
   CheckCircle2,
   Clock,
+  Copy,
   Download,
+  Edit3,
   ExternalLink,
   Eye,
   Lock,
@@ -13,17 +15,20 @@ import {
   MessageSquare,
   Monitor,
   Plus,
+  Presentation,
+  RotateCcw,
   Search,
   ShieldAlert,
   Square,
   Trash2,
   Unlock,
+  Upload,
   Users,
   X,
   XCircle,
 } from 'lucide-react';
 import { GroupRoster } from '../data/defaultRoster';
-import { QUESTIONS } from '../data/questions';
+import { Question, QUESTIONS as DEFAULT_QUESTIONS } from '../data/questions';
 import {
   FeedbackEntry,
   GlobalTimerState,
@@ -34,7 +39,10 @@ import {
 } from '../services/courseService';
 import {
   formatScheduledDateRu,
+  ProjectGuideConfig,
   removeSession,
+  saveProjectGuide,
+  saveQuestions,
   saveRoster,
   saveTestConfigs,
   StudentSession,
@@ -42,6 +50,7 @@ import {
   TestDefinition,
   ViolationEvent,
 } from '../services/telemetryService';
+import { QuestionEditorModal } from './QuestionEditorModal';
 
 interface AdminDashboardProps {
   sessions: StudentSession[];
@@ -49,6 +58,8 @@ interface AdminDashboardProps {
   syncStatus: SyncStatus;
   roster: GroupRoster[];
   tests: TestDefinition[];
+  questions: Question[];
+  projectGuide: ProjectGuideConfig;
   missions: Mission[];
   allSubmissions: MissionSubmission[];
   allFeedback: FeedbackEntry[];
@@ -57,6 +68,7 @@ interface AdminDashboardProps {
   onBackToPortal: () => void;
   onEnterStudentView: () => void;
   onOpenSecondScreenInPlace: () => void;
+  onOpenProjectGuide: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -65,6 +77,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   syncStatus,
   roster,
   tests,
+  questions,
+  projectGuide,
   missions,
   allSubmissions,
   allFeedback,
@@ -73,6 +87,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onBackToPortal,
   onEnterStudentView,
   onOpenSecondScreenInPlace,
+  onOpenProjectGuide,
 }) => {
   const [activeTab, setActiveTab] = useState<'live' | 'schedule' | 'course' | 'roster' | 'questions'>('live');
   const [groupFilter, setGroupFilter] = useState<string>('all');
@@ -104,10 +119,130 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newTestSections, setNewTestSections] = useState<string[]>([]);
   const [testsSaveMsg, setTestsSaveMsg] = useState<string | null>(null);
 
+  // Question Constructor state
+  const [qSearch, setQSearch] = useState('');
+  const [qSectionFilter, setQSectionFilter] = useState('all');
+  const [editingQuestion, setEditingQuestion] = useState<Question | null | 'new'>(null);
+  const [qSaveMsg, setQSaveMsg] = useState<string | null>(null);
+  const [confirmResetQ, setConfirmResetQ] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+
+  const [guideSaveMsg, setGuideSaveMsg] = useState<string | null>(null);
+
   const allQuestionSections = useMemo(
-    () => Array.from(new Set(QUESTIONS.map((q) => q.section))),
-    []
+    () => Array.from(new Set(questions.map((q) => q.section))),
+    [questions]
   );
+
+  const filteredQuestions = useMemo(() => {
+    const query = qSearch.trim().toLowerCase();
+    return questions.filter((q) => {
+      if (qSectionFilter !== 'all' && q.section !== qSectionFilter) return false;
+      if (
+        query &&
+        !q.title.toLowerCase().includes(query) &&
+        !q.desc.toLowerCase().includes(query) &&
+        !q.section.toLowerCase().includes(query)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [questions, qSearch, qSectionFilter]);
+
+  const nextQuestionId = useMemo(
+    () => questions.reduce((max, q) => Math.max(max, q.id), 0) + 1,
+    [questions]
+  );
+
+  const persistQuestions = async (next: Question[], msg: string) => {
+    try {
+      await saveQuestions(next);
+      setQSaveMsg(msg);
+    } catch {
+      setQSaveMsg('Сохранено локально (проверьте права записи Firestore для вопросов).');
+    }
+    window.setTimeout(() => setQSaveMsg(null), 4000);
+  };
+
+  const handleSaveQuestionFromModal = async (saved: Question) => {
+    const exists = questions.some((q) => q.id === saved.id);
+    const next = exists
+      ? questions.map((q) => (q.id === saved.id ? saved : q))
+      : [...questions, saved];
+    setEditingQuestion(null);
+    await persistQuestions(
+      next,
+      exists ? `Задание #${saved.id} обновлено.` : `Добавлено новое задание #${saved.id}.`
+    );
+  };
+
+  const handleDuplicateQuestion = async (q: Question) => {
+    const clone: Question = {
+      ...q,
+      id: nextQuestionId,
+      title: `${q.title} (копия)`,
+    };
+    const next = [...questions, clone];
+    await persistQuestions(next, `Создана копия задания #${clone.id}.`);
+  };
+
+  const handleDeleteQuestion = async (id: number) => {
+    if (questions.length <= 1) return;
+    const next = questions.filter((q) => q.id !== id);
+    await persistQuestions(next, `Задание #${id} удалено.`);
+  };
+
+  const handleExportQuestionsJson = () => {
+    const blob = new Blob([JSON.stringify(questions, null, 2)], {
+      type: 'application/json;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `godot-questions-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportQuestionsJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        setQSaveMsg('Ошибка: JSON-файл не содержит массив вопросов.');
+        return;
+      }
+      await persistQuestions(parsed as Question[], `Импортировано вопросов: ${parsed.length}.`);
+    } catch {
+      setQSaveMsg('Ошибка чтения JSON-файла.');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleUpdateDefenseDate = async (
+    groupName: string,
+    patch: { date?: string; note?: string }
+  ) => {
+    const current = projectGuide.groupDates?.[groupName] || { date: '', note: '' };
+    const next: ProjectGuideConfig = {
+      ...projectGuide,
+      groupDates: {
+        ...(projectGuide.groupDates || {}),
+        [groupName]: { ...current, ...patch },
+      },
+    };
+    try {
+      await saveProjectGuide(next);
+      setGuideSaveMsg(`Дата защиты для «${groupName}» обновлена.`);
+    } catch {
+      setGuideSaveMsg('Сохранено локально (проверьте права записи Firestore).');
+    }
+    window.setTimeout(() => setGuideSaveMsg(null), 3500);
+  };
 
   const persistTests = async (next: TestDefinition[], msg: string) => {
     try {
@@ -169,14 +304,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const selectedQIds =
       newTestSections.length === 0
         ? []
-        : QUESTIONS.filter((q) => newTestSections.includes(q.section)).map((q) => q.id);
+        : questions.filter((q) => newTestSections.includes(q.section)).map((q) => q.id);
 
     const created: TestDefinition = {
       id: `test_${Date.now()}`,
       title,
       description:
         newTestDesc.trim() ||
-        `Тестовое задание (${selectedQIds.length || QUESTIONS.length} вопросов).`,
+        `Тестовое задание (${selectedQIds.length || questions.length} вопросов).`,
       durationMinutes: Math.max(1, Math.min(180, Number(newTestDuration) || 20)),
       questionIds: selectedQIds,
       isUnlocked: false,
@@ -465,7 +600,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   : 'border-transparent text-[#8EA0B0] hover:text-white'
               }`}
             >
-              Вопросы и ключи ({QUESTIONS.length})
+              Конструктор вопросов ({questions.length})
             </button>
           </nav>
 
@@ -825,7 +960,7 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
 
                 <div>
                   <div className="text-xs font-mono text-[#8EA0B0] mb-2">
-                    Разделы вопросов (если не выбрано ничего — включаются все {QUESTIONS.length} заданий)
+                    Разделы вопросов (если не выбрано ничего — включаются все {questions.length} заданий)
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                     {allQuestionSections.map((sec) => {
@@ -873,7 +1008,7 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
             <div className="space-y-5">
               {tests.map((test) => {
                 const qCount =
-                  test.questionIds.length > 0 ? test.questionIds.length : QUESTIONS.length;
+                  test.questionIds.length > 0 ? test.questionIds.length : questions.length;
 
                 return (
                   <div
@@ -1249,6 +1384,61 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                   </div>
                 </form>
               </div>
+
+              {/* Project Defense Dates Quick Card */}
+              <div className="p-5 rounded-xl border border-[#24303C] bg-[#161E27] space-y-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Presentation className="w-4 h-4 text-[#9ED164]" />
+                    <span>Защита проектов (1 семестр)</span>
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={onOpenProjectGuide}
+                    className="text-xs font-mono text-[#9ED164] hover:underline cursor-pointer"
+                  >
+                    Открыть методичку
+                  </button>
+                </div>
+                <p className="text-xs text-[#9FB0C0] leading-relaxed">
+                  Назначьте индивидуальные даты защиты презентаций для каждой группы.
+                </p>
+                {guideSaveMsg && (
+                  <div className="p-2.5 rounded border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
+                    {guideSaveMsg}
+                  </div>
+                )}
+                <div className="space-y-2.5">
+                  {roster.map((grp) => {
+                    const entry = projectGuide.groupDates?.[grp.name] || { date: '', note: '' };
+                    return (
+                      <div
+                        key={grp.id}
+                        className="p-3 rounded-lg border border-[#24303C] bg-[#11171D] space-y-2"
+                      >
+                        <div className="text-xs font-semibold text-white">{grp.name}</div>
+                        <input
+                          type="datetime-local"
+                          value={entry.date}
+                          onChange={(e) =>
+                            handleUpdateDefenseDate(grp.name, { date: e.target.value })
+                          }
+                          className="w-full bg-[#0F141A] border border-[#344656] rounded px-2.5 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-[#9ED164]"
+                        />
+                        <input
+                          type="text"
+                          value={entry.note}
+                          onChange={(e) =>
+                            handleUpdateDefenseDate(grp.name, { note: e.target.value })
+                          }
+                          placeholder="Ауд. или формат защиты"
+                          className="w-full bg-[#0F141A] border border-[#344656] rounded px-2.5 py-1.5 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1382,35 +1572,179 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
           </div>
         )}
 
-        {/* TAB 4: Questions Reference */}
+        {/* TAB 4: Web Question Constructor */}
         {activeTab === 'questions' && (
-          <div className="space-y-3">
-            {QUESTIONS.map((q) => (
-              <div
-                key={q.id}
-                className="p-4 rounded-xl border border-[#24303C] bg-[#161E27] space-y-2"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-mono text-[#9ED164]">
-                    Задание {String(q.id).padStart(2, '0')} · {q.section} · {q.type}
-                  </div>
-                </div>
-                <h3 className="text-sm font-bold text-white">{q.title}</h3>
-                <p className="text-xs text-[#9FB0C0]">{q.desc}</p>
-                <div className="text-xs bg-[#11171D] border border-[#24303C] rounded-md p-3 space-y-1">
-                  <div className="text-[#9ED164] font-mono">
-                    Ключ:{' '}
-                    {typeof q.correct === 'object'
-                      ? JSON.stringify(q.correct)
-                      : String(q.correct)}
-                  </div>
-                  <div className="text-[#A4B4C4]">{q.explanation}</div>
-                </div>
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white">
+                  Веб-конструктор вопросов тестирования
+                </h2>
+                <p className="text-xs text-[#9FB0C0] mt-0.5">
+                  Редактируйте существующие задания, создавайте новые вопросы любых форматов или экспортируйте базу в JSON без правки кода.
+                </p>
               </div>
-            ))}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={importFileRef}
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={handleImportQuestionsJson}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => importFileRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#344656] bg-[#161E27] text-xs font-medium text-[#D7E0E8] hover:border-[#9ED164] cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Импорт JSON</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportQuestionsJson}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#344656] bg-[#161E27] text-xs font-medium text-[#D7E0E8] hover:border-[#9ED164] cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Экспорт JSON</span>
+                </button>
+                {confirmResetQ ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setConfirmResetQ(false);
+                      await persistQuestions(
+                        DEFAULT_QUESTIONS,
+                        'Восстановлены 27 стандартных вопросов.'
+                      );
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-[#E06C75] text-[#1A0D0F] text-xs font-semibold cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Точно сбросить?</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmResetQ(true);
+                      window.setTimeout(() => setConfirmResetQ(false), 4000);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#344656] bg-[#161E27] text-xs font-medium text-[#9FB0C0] hover:text-white cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Сброс</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setEditingQuestion('new')}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Добавить вопрос</span>
+                </button>
+              </div>
+            </div>
+
+            {qSaveMsg && (
+              <div className="p-3 rounded-lg border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
+                {qSaveMsg}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[220px] max-w-md">
+                <Search className="w-4 h-4 text-[#6C7E8E] absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={qSearch}
+                  onChange={(e) => setQSearch(e.target.value)}
+                  placeholder="Поиск вопроса по тексту или разделу..."
+                  className="w-full bg-[#161E27] border border-[#2A3744] rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
+                />
+              </div>
+              <select
+                value={qSectionFilter}
+                onChange={(e) => setQSectionFilter(e.target.value)}
+                className="bg-[#161E27] border border-[#2A3744] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              >
+                <option value="all">Все разделы ({questions.length})</option>
+                {allQuestionSections.map((sec) => (
+                  <option key={sec} value={sec}>
+                    {sec}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              {filteredQuestions.map((q) => (
+                <div
+                  key={q.id}
+                  className="p-4 rounded-xl border border-[#24303C] bg-[#161E27] space-y-2.5"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-mono text-[#9ED164]">
+                      Задание {String(q.id).padStart(2, '0')} · {q.section} · {q.type} ({q.kind})
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditingQuestion(q)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#344656] bg-[#11171D] text-xs text-[#D7E0E8] hover:border-[#9ED164] hover:text-white cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>Изменить</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDuplicateQuestion(q)}
+                        title="Дублировать вопрос"
+                        className="p-1.5 rounded border border-[#344656] bg-[#11171D] text-[#8EA0B0] hover:text-white cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      {questions.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteQuestion(q.id)}
+                          title="Удалить вопрос"
+                          className="p-1.5 rounded border border-[#344656] bg-[#11171D] text-[#8EA0B0] hover:text-[#E06C75] cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <h3 className="text-sm font-bold text-white">{q.title}</h3>
+                  <p className="text-xs text-[#9FB0C0]">{q.desc}</p>
+                  <div className="text-xs bg-[#11171D] border border-[#24303C] rounded-md p-3 space-y-1">
+                    <div className="text-[#9ED164] font-mono break-words">
+                      Ключ:{' '}
+                      {typeof q.correct === 'object'
+                        ? JSON.stringify(q.correct)
+                        : String(q.correct)}
+                    </div>
+                    <div className="text-[#A4B4C4]">{q.explanation}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </main>
+
+      {editingQuestion !== null && (
+        <QuestionEditorModal
+          initialQuestion={editingQuestion === 'new' ? null : editingQuestion}
+          nextId={nextQuestionId}
+          existingSections={allQuestionSections}
+          onClose={() => setEditingQuestion(null)}
+          onSave={handleSaveQuestionFromModal}
+        />
+      )}
 
       {/* Student Detail Modal */}
       {selectedSession && (
