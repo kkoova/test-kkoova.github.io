@@ -91,6 +91,52 @@ export interface ProjectGuideConfig {
   groupDates: Record<string, GroupDefenseDate>;
 }
 
+export type GradeValue = 2 | 3 | 4 | 5 | 'pass' | null;
+
+export interface StudentGradeRecord {
+  labs: GradeValue[];
+  midtermTest: GradeValue;
+  finalTest: GradeValue;
+  projectDefense: GradeValue;
+  attendance: number | null;
+  manualSemesterGrade?: string | null;
+  note?: string;
+}
+
+export interface GradebookConfig {
+  semesterLabel: string;
+  labsCount: number;
+  attendanceThreshold: number;
+  midtermTestId: string;
+  finalTestId: string;
+  records: Record<string, StudentGradeRecord>;
+}
+
+export interface StudentSemesterSummary {
+  labsCompleted: number;
+  labsTotal: number;
+  midtermPassed: boolean;
+  defensePassed: boolean;
+  attendanceKnown: boolean;
+  needsFinalTest: boolean | null;
+  finalTestPassed: boolean;
+  numericAverage: number | null;
+  missingItems: string[];
+  isEligibleForPass: boolean;
+  semesterGradeShort: string;
+  semesterGradeLabel: string;
+  isManualOverride: boolean;
+}
+
+export const DEFAULT_GRADEBOOK: GradebookConfig = {
+  semesterLabel: 'Зимний семестр (1 семестр)',
+  labsCount: 6,
+  attendanceThreshold: 75,
+  midtermTestId: '',
+  finalTestId: '',
+  records: {},
+};
+
 export const DEFAULT_PROJECT_GUIDE: ProjectGuideConfig = {
   semesterTitle: 'Итоговая защита проекта · 1 семестр',
   slidesRange: '8–10 слайдов',
@@ -108,6 +154,7 @@ const LOCAL_ROSTER_KEY = 'godot_test_local_roster_v1';
 const LOCAL_TESTS_KEY = 'godot_test_local_configs_v1';
 const LOCAL_PROJECT_GUIDE_KEY = 'godot_project_guide_v1';
 const LOCAL_QUESTIONS_KEY = 'godot_test_local_questions_v1';
+const LOCAL_GRADEBOOK_KEY = 'godot_gradebook_v1';
 const CHANNEL_NAME = 'godot_test_telemetry_v1';
 
 export const DEFAULT_TESTS: TestDefinition[] = [
@@ -853,3 +900,279 @@ export function subscribeTelemetry(callbacks: {
     window.removeEventListener('storage', handleStorage);
   };
 }
+
+export function makeGradebookKey(groupName: string, studentName: string): string {
+  return `${groupName}::${studentName}`;
+}
+
+export function getDefaultStudentRecord(labsCount = 6): StudentGradeRecord {
+  return {
+    labs: Array.from({ length: labsCount }, () => null),
+    midtermTest: null,
+    finalTest: null,
+    projectDefense: null,
+    attendance: null,
+    manualSemesterGrade: null,
+    note: '',
+  };
+}
+
+export function normalizeStudentRecord(
+  rec: Partial<StudentGradeRecord> | undefined,
+  labsCount = 6
+): StudentGradeRecord {
+  const base = getDefaultStudentRecord(labsCount);
+  if (!rec) return base;
+  const rawLabs = Array.isArray(rec.labs) ? rec.labs : [];
+  const labs: GradeValue[] = Array.from({ length: labsCount }, (_, idx) =>
+    rawLabs[idx] !== undefined ? rawLabs[idx] : null
+  );
+  return {
+    labs,
+    midtermTest: rec.midtermTest ?? null,
+    finalTest: rec.finalTest ?? null,
+    projectDefense: rec.projectDefense ?? null,
+    attendance:
+      typeof rec.attendance === 'number' && !Number.isNaN(rec.attendance)
+        ? Math.max(0, Math.min(100, Math.round(rec.attendance)))
+        : null,
+    manualSemesterGrade: rec.manualSemesterGrade ?? null,
+    note: rec.note ?? '',
+  };
+}
+
+export function isPassingGrade(val: GradeValue): boolean {
+  return val === 5 || val === 4 || val === 3 || val === 'pass';
+}
+
+export function formatGradeValue(val: GradeValue): string {
+  if (val === 'pass') return 'Зачёт';
+  if (val === null || val === undefined) return '—';
+  return String(val);
+}
+
+export function percentageToGrade5(pct: number): 5 | 4 | 3 | 2 {
+  if (pct >= 85) return 5;
+  if (pct >= 70) return 4;
+  if (pct >= 50) return 3;
+  return 2;
+}
+
+export function computeStudentSemesterSummary(
+  rawRecord: Partial<StudentGradeRecord> | undefined,
+  config: GradebookConfig
+): StudentSemesterSummary {
+  const labsTotal = Math.max(1, config.labsCount || 6);
+  const record = normalizeStudentRecord(rawRecord, labsTotal);
+
+  const labsCompleted = record.labs.filter((v) => isPassingGrade(v)).length;
+  const midtermPassed = isPassingGrade(record.midtermTest);
+  const defensePassed = isPassingGrade(record.projectDefense);
+
+  const attendanceKnown = record.attendance !== null;
+  const needsFinalTest =
+    record.attendance === null ? null : record.attendance < (config.attendanceThreshold ?? 75);
+  const finalTestPassed = isPassingGrade(record.finalTest);
+
+  const numericGrades: number[] = [];
+  for (const l of record.labs) {
+    if (typeof l === 'number') numericGrades.push(l);
+  }
+  if (typeof record.midtermTest === 'number') numericGrades.push(record.midtermTest);
+  if (needsFinalTest === true && typeof record.finalTest === 'number') {
+    numericGrades.push(record.finalTest);
+  }
+  if (typeof record.projectDefense === 'number') numericGrades.push(record.projectDefense);
+
+  const numericAverage =
+    numericGrades.length > 0
+      ? Math.round((numericGrades.reduce((a, b) => a + b, 0) / numericGrades.length) * 100) / 100
+      : null;
+
+  const missingItems: string[] = [];
+  if (labsCompleted < labsTotal) {
+    missingItems.push(`Лаб. работы (${labsCompleted}/${labsTotal})`);
+  }
+  if (!midtermPassed) {
+    missingItems.push('Промеж. тест');
+  }
+  if (needsFinalTest === true && !finalTestPassed) {
+    missingItems.push('Итоговый тест');
+  }
+  if (!defensePassed) {
+    missingItems.push('Предзащита проекта');
+  }
+  if (!attendanceKnown) {
+    missingItems.push('Посещаемость');
+  }
+
+  const isEligibleForPass =
+    labsCompleted === labsTotal &&
+    midtermPassed &&
+    defensePassed &&
+    attendanceKnown &&
+    (needsFinalTest === false || finalTestPassed);
+
+  const hasAnyEntry =
+    labsCompleted > 0 ||
+    record.labs.some((v) => v !== null) ||
+    record.midtermTest !== null ||
+    record.finalTest !== null ||
+    record.projectDefense !== null ||
+    attendanceKnown;
+
+  let semesterGradeShort = '—';
+  let semesterGradeLabel = 'Нет данных';
+
+  if (record.manualSemesterGrade) {
+    const manual = record.manualSemesterGrade;
+    semesterGradeShort = manual;
+    if (manual === '5') semesterGradeLabel = 'Отлично (5)';
+    else if (manual === '4') semesterGradeLabel = 'Хорошо (4)';
+    else if (manual === '3') semesterGradeLabel = 'Удовлетворительно (3)';
+    else if (manual === '2') semesterGradeLabel = 'Неудовлетворительно (2)';
+    else semesterGradeLabel = manual;
+    return {
+      labsCompleted,
+      labsTotal,
+      midtermPassed,
+      defensePassed,
+      attendanceKnown,
+      needsFinalTest,
+      finalTestPassed,
+      numericAverage,
+      missingItems,
+      isEligibleForPass,
+      semesterGradeShort,
+      semesterGradeLabel,
+      isManualOverride: true,
+    };
+  }
+
+  if (isEligibleForPass) {
+    if (numericAverage !== null) {
+      const rounded = Math.max(3, Math.min(5, Math.round(numericAverage)));
+      semesterGradeShort = String(rounded);
+      if (rounded === 5) semesterGradeLabel = 'Отлично (5)';
+      else if (rounded === 4) semesterGradeLabel = 'Хорошо (4)';
+      else semesterGradeLabel = 'Удовлетворительно (3)';
+    } else {
+      semesterGradeShort = 'Зачёт';
+      semesterGradeLabel = 'Зачёт';
+    }
+  } else if (hasAnyEntry) {
+    semesterGradeShort = 'Долг';
+    semesterGradeLabel = 'Незачёт (есть долги)';
+  }
+
+  return {
+    labsCompleted,
+    labsTotal,
+    midtermPassed,
+    defensePassed,
+    attendanceKnown,
+    needsFinalTest,
+    finalTestPassed,
+    numericAverage,
+    missingItems,
+    isEligibleForPass,
+    semesterGradeShort,
+    semesterGradeLabel,
+    isManualOverride: false,
+  };
+}
+
+export function readLocalGradebook(): GradebookConfig {
+  try {
+    const raw = localStorage.getItem(LOCAL_GRADEBOOK_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          ...DEFAULT_GRADEBOOK,
+          ...parsed,
+          records: parsed.records || {},
+        };
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return DEFAULT_GRADEBOOK;
+}
+
+function writeLocalGradebook(gradebook: GradebookConfig) {
+  try {
+    localStorage.setItem(LOCAL_GRADEBOOK_KEY, JSON.stringify(gradebook));
+    getChannel()?.postMessage({ kind: 'gradebook_update', gradebook });
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveGradebook(gradebook: GradebookConfig): Promise<void> {
+  writeLocalGradebook(gradebook);
+  try {
+    await setDoc(doc(db, 'godot_test_config', 'gradebook'), {
+      gradebookJson: JSON.stringify(gradebook),
+      updatedAtMs: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Firestore gradebook save failed:', err);
+    throw err;
+  }
+}
+
+export function subscribeGradebook(
+  onUpdate: (gradebook: GradebookConfig) => void
+): () => void {
+  onUpdate(readLocalGradebook());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'gradebook'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data?.gradebookJson === 'string') {
+          try {
+            const parsed = JSON.parse(data.gradebookJson) as Partial<GradebookConfig>;
+            const merged: GradebookConfig = {
+              ...DEFAULT_GRADEBOOK,
+              ...parsed,
+              records: parsed.records || {},
+            };
+            writeLocalGradebook(merged);
+            onUpdate(merged);
+          } catch {
+            // ignore malformed JSON
+          }
+        }
+      }
+    },
+    (err) => {
+      console.warn('Firestore gradebook snapshot error:', err.code);
+    }
+  );
+
+  const ch = getChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'gradebook_update' && ev.data.gradebook) {
+      onUpdate(ev.data.gradebook);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_GRADEBOOK_KEY) {
+      onUpdate(readLocalGradebook());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+

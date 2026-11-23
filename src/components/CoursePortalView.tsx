@@ -1,28 +1,24 @@
 import React, { useMemo, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   BookOpen,
   Check,
   CheckCircle2,
   Gamepad2,
-  GitBranch,
   LayoutGrid,
   Network,
   Play,
-  Send,
   X,
 } from 'lucide-react';
-import { Mission, MissionSubmission, submitMissionReport } from '../services/courseService';
+import { Mission } from '../services/courseService';
 import { GroupRoster } from '../data/defaultRoster';
-import { ProjectGuideConfig } from '../services/telemetryService';
+import { GradebookConfig, ProjectGuideConfig } from '../services/telemetryService';
 import { ProjectGuideBanner } from './ProjectGuideView';
 
 interface CoursePortalViewProps {
   missions: Mission[];
-  submissions: MissionSubmission[];
-  user: User | null;
   fallbackName: string;
   projectGuide: ProjectGuideConfig;
+  gradebook: GradebookConfig;
   roster: GroupRoster[];
   onOpenLesson: (tutorialDoc: string) => void;
   onOpenTest: () => void;
@@ -42,10 +38,9 @@ function readStepsProgress(): Record<string, number[]> {
 
 export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
   missions,
-  submissions,
-  user,
   fallbackName,
   projectGuide,
+  gradebook,
   roster,
   onOpenLesson,
   onOpenTest,
@@ -63,22 +58,20 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
     readStepsProgress()
   );
 
-  // Report submission inline state
-  const [showReportForm, setShowReportForm] = useState(false);
-  const [repoLink, setRepoLink] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [submitMessage, setSubmitMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(
-    null
+  const totalStepsAll = useMemo(
+    () => missions.reduce((sum, m) => sum + m.steps.length, 0),
+    [missions]
   );
-
-  const submittedTopicIds = useMemo(
-    () => new Set(submissions.map((s) => s.topicId)),
-    [submissions]
+  const completedStepsAll = useMemo(
+    () =>
+      missions.reduce(
+        (sum, m) => sum + Math.min(m.steps.length, stepsProgress[m.id]?.length || 0),
+        0
+      ),
+    [missions, stepsProgress]
   );
-
-  const completedMissionsCount = missions.filter((m) => submittedTopicIds.has(m.id)).length;
   const courseProgressPct =
-    missions.length > 0 ? Math.round((completedMissionsCount / missions.length) * 100) : 0;
+    totalStepsAll > 0 ? Math.round((completedStepsAll / totalStepsAll) * 100) : 0;
 
   // Deterministic snake graph coordinates for Map view
   const graphNodes = useMemo(() => {
@@ -118,30 +111,6 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
 
   const openMissionModal = (m: Mission) => {
     setActiveMission(m);
-    setShowReportForm(false);
-    setRepoLink('');
-    setSubmitMessage(null);
-  };
-
-  const handleReportSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeMission) return;
-    setSubmitting(true);
-    setSubmitMessage(null);
-    const res = await submitMissionReport({
-      user,
-      fallbackName,
-      topicId: activeMission.id,
-      repository: repoLink,
-    });
-    setSubmitting(false);
-    if (!res.ok) {
-      setSubmitMessage({ type: 'err', text: res.error || 'Ошибка отправки отчёта.' });
-      return;
-    }
-    setSubmitMessage({ type: 'ok', text: 'Отчёт успешно сохранён в журнале.' });
-    setRepoLink('');
-    setShowReportForm(false);
   };
 
   return (
@@ -158,16 +127,16 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
             Миссии и практические проекты
           </h1>
           <p className="text-sm text-[#9FB0C0] leading-relaxed">
-            Открывайте интерактивные сборки, изучайте методические инструкции, отмечайте выполненные этапы и отправляйте ссылки на GitHub-репозитории.
+            Открывайте интерактивные сборки, изучайте методические инструкции и отмечайте выполненные этапы по каждой практической работе.
           </p>
         </div>
 
         <div className="flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end gap-3 shrink-0">
           <div className="p-3.5 rounded-lg border border-[#26323F] bg-[#11171D] min-w-[230px]">
             <div className="flex items-center justify-between text-xs mb-1.5">
-              <span className="text-[#8EA0B0]">Сдано миссий</span>
+              <span className="text-[#8EA0B0]">Пройдено этапов</span>
               <span className="font-mono font-bold text-[#9ED164] tabular-nums">
-                {completedMissionsCount} / {missions.length} ({courseProgressPct}%)
+                {completedStepsAll} / {totalStepsAll} ({courseProgressPct}%)
               </span>
             </div>
             <div className="h-1.5 rounded-full bg-[#222D38] overflow-hidden">
@@ -217,10 +186,12 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
         </div>
       </section>
 
-      {/* Prominent Semester 1 Project Defense Guide Banner */}
+      {/* Prominent Semester 1 Credit Requirements, Grades & Project Defense Banner */}
       <ProjectGuideBanner
         guide={projectGuide}
+        gradebook={gradebook}
         roster={roster}
+        defaultStudentHint={fallbackName}
         onOpenGuide={onOpenProjectGuide}
       />
 
@@ -228,9 +199,9 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
       {viewMode === 'grid' && (
         <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {missions.map((mission, idx) => {
-            const isSubmitted = submittedTopicIds.has(mission.id);
             const checkedSteps = stepsProgress[mission.id]?.length || 0;
             const totalSteps = mission.steps.length;
+            const allStepsDone = totalSteps > 0 && checkedSteps >= totalSteps;
 
             return (
               <div
@@ -255,10 +226,10 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
                     <span className="font-mono text-xs text-[#CBEF9C] tabular-nums">
                       Модуль {String(idx + 1).padStart(2, '0')}
                     </span>
-                    {isSubmitted && (
+                    {allStepsDone && (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-[#9ED164]">
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Сдано</span>
+                        <span>Этапы пройдены</span>
                       </span>
                     )}
                   </div>
@@ -336,7 +307,8 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
             </svg>
 
             {graphNodes.map(({ mission, index, x, y }) => {
-              const isSubmitted = submittedTopicIds.has(mission.id);
+              const checkedSteps = stepsProgress[mission.id]?.length || 0;
+              const allStepsDone = mission.steps.length > 0 && checkedSteps >= mission.steps.length;
               const isHovered = hoveredMission?.mission.id === mission.id;
 
               return (
@@ -350,14 +322,14 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
                   className={`absolute -translate-x-1/2 -translate-y-1/2 w-32 p-3 rounded-xl border text-center transition-colors cursor-pointer ${
                     isHovered
                       ? 'bg-[#213124] border-[#9ED164] z-20'
-                      : isSubmitted
+                      : allStepsDone
                         ? 'bg-[#16231A] border-[#4A7039] z-10'
                         : 'bg-[#161E27] border-[#2A3744] hover:border-[#62854B] z-10'
                   }`}
                 >
                   <div className="flex items-center justify-center gap-1.5 font-mono text-base font-bold text-[#F1F6FA] tabular-nums">
                     <span>{String(index + 1).padStart(2, '0')}</span>
-                    {isSubmitted && <CheckCircle2 className="w-3.5 h-3.5 text-[#9ED164]" />}
+                    {allStepsDone && <CheckCircle2 className="w-3.5 h-3.5 text-[#9ED164]" />}
                   </div>
                   <div className="mt-1 text-[11px] text-[#9FB0C0] truncate">{mission.title}</div>
                 </button>
@@ -432,7 +404,7 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
                     Индивидуальный проект студента
                   </div>
                   <p className="text-xs text-[#8EA0B0] max-w-md leading-relaxed">
-                    Для этой миссии нет готового демо-примера. Разработайте собственную игру в Godot Engine по предложенным этапам и сдайте ссылку на репозиторий GitHub.
+                    Для этой миссии нет готового демо-примера. Разработайте собственную игру в Godot Engine по предложенным этапам и подготовьте к предзащите.
                   </p>
                 </div>
               )}
@@ -499,67 +471,8 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
               </div>
 
               {/* Footer Actions */}
-              <div className="space-y-3 pt-4 border-t border-[#24303C]">
-                {submitMessage && (
-                  <div
-                    className={`p-3 rounded-lg text-xs border ${
-                      submitMessage.type === 'ok'
-                        ? 'bg-[#213124] border-[#5D8247] text-[#CBEF9C]'
-                        : 'bg-[#2D181B] border-[#E06C75]/50 text-[#FFB8BE]'
-                    }`}
-                  >
-                    {submitMessage.text}
-                  </div>
-                )}
-
-                {submittedTopicIds.has(activeMission.id) ? (
-                  <div className="p-3 rounded-lg bg-[#213124] border border-[#5D8247] text-xs text-[#CBEF9C] flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>Отчёт по этой миссии уже отправлен</span>
-                  </div>
-                ) : showReportForm ? (
-                  <form onSubmit={handleReportSubmit} className="space-y-2.5">
-                    <label className="block text-xs font-mono text-[#8EA0B0]">
-                      Ссылка на репозиторий GitHub
-                    </label>
-                    <input
-                      type="url"
-                      required
-                      value={repoLink}
-                      onChange={(e) => setRepoLink(e.target.value)}
-                      placeholder="https://github.com/username/godot-project"
-                      className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="submit"
-                        disabled={submitting}
-                        className="flex-1 py-2 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] cursor-pointer inline-flex items-center justify-center gap-1.5"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>{submitting ? 'Отправка...' : 'Отправить'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowReportForm(false)}
-                        className="px-3 py-2 rounded-lg border border-[#344656] text-xs text-[#9FB0C0] hover:text-white cursor-pointer"
-                      >
-                        Отмена
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowReportForm(true)}
-                    className="w-full py-2.5 px-4 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <GitBranch className="w-4 h-4" />
-                    <span>Сдать проект (GitHub)</span>
-                  </button>
-                )}
-
-                {activeMission.tutorial_url && (
+              {activeMission.tutorial_url && (
+                <div className="pt-4 border-t border-[#24303C]">
                   <button
                     type="button"
                     onClick={() => {
@@ -567,13 +480,13 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
                       setActiveMission(null);
                       onOpenLesson(docUrl);
                     }}
-                    className="w-full py-2.5 px-4 rounded-lg border border-[#344656] bg-[#11171D] text-xs font-medium text-[#D7E0E8] hover:border-[#9ED164] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <BookOpen className="w-4 h-4" />
                     <span>Открыть методичку</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -12,13 +12,16 @@ import {
 import {
   completeSession,
   createOrStartSession,
+  GradebookConfig,
   ProjectGuideConfig,
+  readLocalGradebook,
   readLocalProjectGuide,
   readLocalQuestions,
   readLocalRoster,
   readLocalTestConfigs,
   recordViolation,
   StudentSession,
+  subscribeGradebook,
   subscribeProjectGuide,
   subscribeQuestions,
   subscribeRoster,
@@ -35,11 +38,8 @@ import {
   fetchMissions,
   GlobalTimerState,
   Mission,
-  MissionSubmission,
   subscribeAllFeedback,
-  subscribeAllSubmissions,
   subscribeGlobalTimer,
-  subscribeUserSubmissions,
 } from './services/courseService';
 import { PortalHeader } from './components/PortalHeader';
 import { CoursePortalView } from './components/CoursePortalView';
@@ -114,26 +114,25 @@ export default function App() {
   // Course data state
   const [missions, setMissions] = useState<Mission[]>([]);
   const [missionsError, setMissionsError] = useState<string | null>(null);
-  const [userSubmissions, setUserSubmissions] = useState<MissionSubmission[]>([]);
   const [globalTimer, setGlobalTimer] = useState<GlobalTimerState | null>(null);
 
   // Modals
   const [profileOpen, setProfileOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
-  // Roster, Tests Catalog, Live Questions, Project Guide & Telemetry state
+  // Roster, Tests Catalog, Live Questions, Project Guide, Gradebook & Telemetry state
   const [roster, setRoster] = useState<GroupRoster[]>(() => readLocalRoster());
   const [tests, setTests] = useState<TestDefinition[]>(() => readLocalTestConfigs());
   const [questions, setQuestions] = useState<Question[]>(() => readLocalQuestions());
   const [projectGuide, setProjectGuide] = useState<ProjectGuideConfig>(() =>
     readLocalProjectGuide()
   );
+  const [gradebook, setGradebook] = useState<GradebookConfig>(() => readLocalGradebook());
   const [preselectedTestId, setPreselectedTestId] = useState<string | null>(null);
 
   const [sessions, setSessions] = useState<StudentSession[]>([]);
   const [violationsFeed, setViolationsFeed] = useState<ViolationEvent[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
-  const [allSubmissions, setAllSubmissions] = useState<MissionSubmission[]>([]);
   const [allFeedback, setAllFeedback] = useState<FeedbackEntry[]>([]);
 
   // Active Student Test state
@@ -197,30 +196,23 @@ export default function App() {
     return subscribeGlobalTimer(setGlobalTimer);
   }, []);
 
-  // 4. Subscribe to Student Roster, Test Configurations, Questions & Project Guide
+  // 4. Subscribe to Student Roster, Test Configurations, Questions, Project Guide & Gradebook
   useEffect(() => {
     const unsubRoster = subscribeRoster(setRoster);
     const unsubTests = subscribeTestConfigs(setTests);
     const unsubQuestions = subscribeQuestions(setQuestions);
     const unsubProjectGuide = subscribeProjectGuide(setProjectGuide);
+    const unsubGradebook = subscribeGradebook(setGradebook);
     return () => {
       unsubRoster();
       unsubTests();
       unsubQuestions();
       unsubProjectGuide();
+      unsubGradebook();
     };
   }, []);
 
-  // 5. Subscribe to Current User's Submissions
-  useEffect(() => {
-    if (!rawSignedIn) {
-      setUserSubmissions([]);
-      return;
-    }
-    return subscribeUserSubmissions(firebaseUser?.uid || null, setUserSubmissions);
-  }, [rawSignedIn, firebaseUser?.uid]);
-
-  // 6. Subscribe to Admin Telemetry & Course Submissions when Admin/Monitor/Profile
+  // 5. Subscribe to Admin Telemetry & Course Feedback when Admin/Monitor/Profile
   useEffect(() => {
     if (!isAdmin && view !== 'admin' && view !== 'monitor' && !profileOpen) return;
     const unsubTel = subscribeTelemetry({
@@ -228,15 +220,12 @@ export default function App() {
       onViolations: setViolationsFeed,
       onStatus: setSyncStatus,
     });
-    let unsubSubs = () => {};
     let unsubFeed = () => {};
     if (isAdmin) {
-      unsubSubs = subscribeAllSubmissions(setAllSubmissions);
       unsubFeed = subscribeAllFeedback(setAllFeedback);
     }
     return () => {
       unsubTel();
-      unsubSubs();
       unsubFeed();
     };
   }, [isAdmin, view, profileOpen]);
@@ -565,11 +554,11 @@ export default function App() {
           tests={tests}
           questions={questions}
           projectGuide={projectGuide}
-          missions={missions}
-          allSubmissions={allSubmissions}
+          gradebook={gradebook}
           allFeedback={allFeedback}
           globalTimer={globalTimer}
           adminLabel={userLabel}
+          onGradebookChange={setGradebook}
           onBackToPortal={() => setView('course')}
           onEnterStudentView={toggleStudentPreview}
           onOpenSecondScreenInPlace={() => setView('monitor')}
@@ -772,8 +761,10 @@ export default function App() {
         {view === 'project' ? (
           <ProjectGuideView
             guide={projectGuide}
+            gradebook={gradebook}
             roster={roster}
             isAdmin={isAdmin}
+            defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
             onBack={() => setView('course')}
           />
         ) : view === 'course' && !isSignedIn && authInitialized ? (
@@ -788,7 +779,7 @@ export default function App() {
                   <div className="text-xs font-mono text-[#9ED164]">Портал курса</div>
                   <h1 className="text-2xl font-bold text-white">Mobile Godot</h1>
                   <p className="text-xs text-[#9FB0C0] leading-relaxed">
-                    Войдите через GitHub, чтобы открыть карту миссий, методические материалы, сдавать проекты и отслеживать личный прогресс. Преподаватель определяется автоматически.
+                    Войдите через GitHub, чтобы открыть карту миссий и методические материалы курса. Преподаватель определяется автоматически.
                   </p>
                 </div>
 
@@ -832,6 +823,7 @@ export default function App() {
 
             <ProjectGuideBanner
               guide={projectGuide}
+              gradebook={gradebook}
               roster={roster}
               onOpenGuide={() => setView('project')}
             />
@@ -844,10 +836,9 @@ export default function App() {
           ) : (
             <CoursePortalView
               missions={missions}
-              submissions={userSubmissions}
-              user={firebaseUser}
               fallbackName={userLabel}
               projectGuide={projectGuide}
+              gradebook={gradebook}
               roster={roster}
               onOpenLesson={(docUrl) => {
                 setActiveDoc(docUrl);
@@ -898,8 +889,10 @@ export default function App() {
         email={firebaseUser?.email || ''}
         photoUrl={firebaseUser?.photoURL || null}
         missions={missions}
-        submissions={userSubmissions}
+        gradebook={gradebook}
+        roster={roster}
         testSessions={userTestSessions}
+        onOpenProjectGuide={() => setView('project')}
       />
 
       <FeedbackModal

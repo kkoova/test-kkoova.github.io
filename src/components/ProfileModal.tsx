@@ -1,7 +1,15 @@
-import React from 'react';
-import { ExternalLink, CheckCircle2, Award, X } from 'lucide-react';
-import { Mission, MissionSubmission } from '../services/courseService';
-import { StudentSession } from '../services/telemetryService';
+import React, { useMemo } from 'react';
+import { Award, CheckCircle2, GraduationCap, X } from 'lucide-react';
+import { GroupRoster } from '../data/defaultRoster';
+import { Mission } from '../services/courseService';
+import {
+  computeStudentSemesterSummary,
+  formatGradeValue,
+  GradebookConfig,
+  makeGradebookKey,
+  normalizeStudentRecord,
+  StudentSession,
+} from '../services/telemetryService';
 
 interface ProfileModalProps {
   open: boolean;
@@ -10,8 +18,24 @@ interface ProfileModalProps {
   email: string;
   photoUrl: string | null;
   missions: Mission[];
-  submissions: MissionSubmission[];
+  gradebook: GradebookConfig;
+  roster: GroupRoster[];
   testSessions: StudentSession[];
+  onOpenProjectGuide: () => void;
+}
+
+function readStoredStudentSelection(): { group: string; student: string } | null {
+  try {
+    const raw = localStorage.getItem('godot_selected_student_grade_v1');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.group === 'string' && typeof parsed.student === 'string') {
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({
@@ -21,17 +45,33 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   email,
   photoUrl,
   missions,
-  submissions,
+  gradebook,
+  roster,
   testSessions,
+  onOpenProjectGuide,
 }) => {
+  const selection = useMemo(() => {
+    const stored = readStoredStudentSelection();
+    if (stored?.group && stored?.student) return stored;
+    const hintLower = displayName.trim().toLowerCase();
+    for (const grp of roster) {
+      const match = grp.students.find((s) => s.toLowerCase() === hintLower);
+      if (match) return { group: grp.name, student: match };
+    }
+    return null;
+  }, [displayName, roster, open]);
+
   if (!open) return null;
 
-  const totalMissions = Math.max(1, missions.length);
-  const completedCount = submissions.length;
-  const percent = Math.min(100, Math.round((completedCount / totalMissions) * 100));
-
-  const missionTitleMap = new Map(missions.map((m) => [m.id, m.title]));
   const completedTests = testSessions.filter((s) => s.status === 'completed');
+  const labsTotal = Math.max(1, gradebook.labsCount || 6);
+  const record = selection
+    ? normalizeStudentRecord(
+        gradebook.records[makeGradebookKey(selection.group, selection.student)],
+        labsTotal
+      )
+    : null;
+  const summary = record ? computeStudentSemesterSummary(record, gradebook) : null;
 
   return (
     <div
@@ -43,7 +83,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[#24303C] pb-4">
-          <h2 className="text-base font-bold text-white">Профиль разработчика</h2>
+          <h2 className="text-base font-bold text-white">Профиль студента</h2>
           <button
             type="button"
             onClick={onClose}
@@ -68,71 +108,87 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           )}
           <div className="min-w-0">
             <div className="text-lg font-bold text-white truncate">{displayName}</div>
-            <div className="text-xs font-mono text-[#8EA0B0] truncate">{email || 'GitHub аккаунт'}</div>
+            <div className="text-xs font-mono text-[#8EA0B0] truncate">
+              {email || 'GitHub аккаунт'}
+            </div>
           </div>
         </div>
 
-        {/* Course Progress */}
-        <div className="p-4 rounded-lg border border-[#24303C] bg-[#11171D] space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-[#9FB0C0]">Прогресс по миссиям курса</span>
-            <span className="font-mono font-bold text-[#9ED164] tabular-nums">
-              {completedCount} / {totalMissions} ({percent}%)
-            </span>
+        {/* Winter Semester Summary */}
+        <div className="p-4 rounded-lg border border-[#24303C] bg-[#11171D] space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-mono text-[#9ED164]">
+              <GraduationCap className="w-4 h-4" />
+              <span>{gradebook.semesterLabel}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenProjectGuide();
+              }}
+              className="text-xs font-mono text-[#7CC4FA] hover:underline cursor-pointer"
+            >
+              Подробнее
+            </button>
           </div>
-          <div className="h-2 rounded-full bg-[#222D38] overflow-hidden">
-            <div
-              className="h-full bg-[#9ED164] transition-all duration-300"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-        </div>
 
-        {/* Submitted Missions */}
-        <div className="space-y-2.5">
-          <h3 className="text-xs font-mono text-[#8EA0B0]">
-            Сданные проекты ({submissions.length})
-          </h3>
-          {submissions.length === 0 ? (
-            <div className="p-4 rounded-lg border border-dashed border-[#2A3744] text-xs text-[#7C8D9C] text-center">
-              Пока нет сданных миссий. Выберите миссию на карте и прикрепите ссылку на GitHub.
+          {selection && record && summary ? (
+            <div className="space-y-2.5 text-xs">
+              <div className="text-[#D7E0E8]">
+                <strong className="text-white">{selection.student}</strong> · {selection.group}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="p-2.5 rounded border border-[#24303C] bg-[#161E27]">
+                  <div className="text-[11px] text-[#8EA0B0]">Лабы</div>
+                  <div className="font-mono font-bold text-white mt-0.5">
+                    {summary.labsCompleted}/{summary.labsTotal}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded border border-[#24303C] bg-[#161E27]">
+                  <div className="text-[11px] text-[#8EA0B0]">Промеж.</div>
+                  <div className="font-mono font-bold text-white mt-0.5">
+                    {formatGradeValue(record.midtermTest)}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded border border-[#24303C] bg-[#161E27]">
+                  <div className="text-[11px] text-[#8EA0B0]">Посещ.</div>
+                  <div className="font-mono font-bold text-white mt-0.5">
+                    {record.attendance !== null ? `${record.attendance}%` : '—'}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded border border-[#24303C] bg-[#161E27]">
+                  <div className="text-[11px] text-[#8EA0B0]">Итог</div>
+                  <div className="font-mono font-bold text-[#9ED164] mt-0.5">
+                    {summary.semesterGradeShort}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="divide-y divide-[#222D38] rounded-lg border border-[#24303C] bg-[#11171D]">
-              {submissions.map((sub) => (
-                <div
-                  key={sub.id}
-                  className="px-4 py-3 flex items-center justify-between gap-3 text-xs"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <CheckCircle2 className="w-4 h-4 text-[#9ED164] shrink-0" />
-                    <span className="font-medium text-[#E6EDF3] truncate">
-                      {missionTitleMap.get(sub.topicId) || sub.topicId}
-                    </span>
-                  </div>
-                  <a
-                    href={sub.repository}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-mono text-[#7CC4FA] hover:underline shrink-0"
-                  >
-                    <span>Репозиторий</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              ))}
-            </div>
+            <p className="text-xs text-[#8EA0B0]">
+              Откройте раздел «Зачёт и проект» и выберите своё ФИО в группе, чтобы видеть сводку оценок и статус итогового теста.
+            </p>
           )}
+        </div>
+
+        {/* Course Modules count */}
+        <div className="p-3.5 rounded-lg border border-[#24303C] bg-[#11171D] flex items-center justify-between text-xs">
+          <span className="text-[#9FB0C0] flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-[#9ED164]" />
+            <span>Доступно практических модулей курса</span>
+          </span>
+          <span className="font-mono font-bold text-white tabular-nums">{missions.length}</span>
         </div>
 
         {/* Godot Test Results */}
         <div className="space-y-2.5">
           <h3 className="text-xs font-mono text-[#8EA0B0]">
-            Результаты итогового тестирования ({completedTests.length})
+            Результаты тестирования ({completedTests.length})
           </h3>
           {completedTests.length === 0 ? (
             <div className="p-4 rounded-lg border border-dashed border-[#2A3744] text-xs text-[#7C8D9C] text-center">
-              Тестирование ещё не пройдено. Перейдите во вкладку «Тестирование».
+              Тестирование ещё не пройдено. Перейдите во вкладку «Тестирования».
             </div>
           ) : (
             <div className="space-y-2">

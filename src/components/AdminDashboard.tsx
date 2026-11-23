@@ -8,14 +8,15 @@ import {
   Copy,
   Download,
   Edit3,
-  ExternalLink,
   Eye,
+  GraduationCap,
   Lock,
   Maximize2,
   MessageSquare,
   Monitor,
   Plus,
   Presentation,
+  RefreshCw,
   RotateCcw,
   Search,
   ShieldAlert,
@@ -32,19 +33,26 @@ import { Question, QUESTIONS as DEFAULT_QUESTIONS } from '../data/questions';
 import {
   FeedbackEntry,
   GlobalTimerState,
-  Mission,
-  MissionSubmission,
   stopGlobalTimer,
   triggerGlobalTimer,
 } from '../services/courseService';
 import {
+  computeStudentSemesterSummary,
+  formatGradeValue,
   formatScheduledDateRu,
+  GradebookConfig,
+  GradeValue,
+  makeGradebookKey,
+  normalizeStudentRecord,
+  percentageToGrade5,
   ProjectGuideConfig,
   removeSession,
+  saveGradebook,
   saveProjectGuide,
   saveQuestions,
   saveRoster,
   saveTestConfigs,
+  StudentGradeRecord,
   StudentSession,
   SyncStatus,
   TestDefinition,
@@ -60,11 +68,11 @@ interface AdminDashboardProps {
   tests: TestDefinition[];
   questions: Question[];
   projectGuide: ProjectGuideConfig;
-  missions: Mission[];
-  allSubmissions: MissionSubmission[];
+  gradebook: GradebookConfig;
   allFeedback: FeedbackEntry[];
   globalTimer: GlobalTimerState | null;
   adminLabel: string;
+  onGradebookChange: (next: GradebookConfig) => void;
   onBackToPortal: () => void;
   onEnterStudentView: () => void;
   onOpenSecondScreenInPlace: () => void;
@@ -79,11 +87,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   tests,
   questions,
   projectGuide,
-  missions,
-  allSubmissions,
+  gradebook,
   allFeedback,
   globalTimer,
   adminLabel,
+  onGradebookChange,
   onBackToPortal,
   onEnterStudentView,
   onOpenSecondScreenInPlace,
@@ -128,6 +136,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const importFileRef = useRef<HTMLInputElement | null>(null);
 
   const [guideSaveMsg, setGuideSaveMsg] = useState<string | null>(null);
+
+  // Gradebook tab state
+  const [gradebookGroupId, setGradebookGroupId] = useState<string>(roster[0]?.id || '');
+  const [gradebookSearch, setGradebookSearch] = useState<string>('');
+  const [gradebookMsg, setGradebookMsg] = useState<string | null>(null);
 
   const allQuestionSections = useMemo(
     () => Array.from(new Set(questions.map((q) => q.section))),
@@ -333,10 +346,165 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     await persistTests(next, 'Тест удалён.');
   };
 
-  const missionTitleMap = useMemo(
-    () => new Map(missions.map((m) => [m.id, m.title])),
-    [missions]
-  );
+  const activeGradebookGroup =
+    roster.find((g) => g.id === gradebookGroupId) || roster[0] || null;
+
+  const persistGradebook = async (next: GradebookConfig, msg?: string) => {
+    onGradebookChange(next);
+    try {
+      await saveGradebook(next);
+      if (msg) setGradebookMsg(msg);
+    } catch {
+      if (msg) setGradebookMsg(`${msg} (локально)`);
+    }
+    if (msg) {
+      window.setTimeout(() => setGradebookMsg(null), 3500);
+    }
+  };
+
+  const updateStudentGradeField = async (
+    groupName: string,
+    studentName: string,
+    updater: (rec: StudentGradeRecord) => StudentGradeRecord
+  ) => {
+    const labsTotal = Math.max(1, gradebook.labsCount || 6);
+    const key = makeGradebookKey(groupName, studentName);
+    const current = normalizeStudentRecord(gradebook.records[key], labsTotal);
+    const updated = updater(current);
+    const next: GradebookConfig = {
+      ...gradebook,
+      records: {
+        ...gradebook.records,
+        [key]: updated,
+      },
+    };
+    await persistGradebook(next);
+  };
+
+  const parseGradeSelect = (raw: string): GradeValue => {
+    if (raw === 'pass') return 'pass';
+    if (raw === '5' || raw === '4' || raw === '3' || raw === '2') return Number(raw) as 2 | 3 | 4 | 5;
+    return null;
+  };
+
+  const encodeGradeSelect = (val: GradeValue): string => {
+    if (val === 'pass') return 'pass';
+    if (val === null || val === undefined) return '';
+    return String(val);
+  };
+
+  const handlePullTestScores = async () => {
+    if (!activeGradebookGroup) return;
+    const labsTotal = Math.max(1, gradebook.labsCount || 6);
+    const nextRecords = { ...gradebook.records };
+    let updatedCount = 0;
+
+    for (const studentName of activeGradebookGroup.students) {
+      const key = makeGradebookKey(activeGradebookGroup.name, studentName);
+      const rec = normalizeStudentRecord(nextRecords[key], labsTotal);
+      const studentSessions = sessions.filter(
+        (s) =>
+          s.status === 'completed' &&
+          s.group === activeGradebookGroup.name &&
+          s.studentName === studentName &&
+          s.percentage !== null
+      );
+      if (studentSessions.length === 0) continue;
+
+      let changed = false;
+      if (gradebook.midtermTestId) {
+        const matched = studentSessions
+          .filter((s) => (s.testId || 'godot-core-1') === gradebook.midtermTestId)
+          .sort((a, b) => (b.percentage ?? 0) - (a.percentage ?? 0))[0];
+        if (matched && matched.percentage !== null) {
+          rec.midtermTest = percentageToGrade5(matched.percentage);
+          changed = true;
+        }
+      }
+      if (gradebook.finalTestId) {
+        const matched = studentSessions
+          .filter((s) => (s.testId || 'godot-core-1') === gradebook.finalTestId)
+          .sort((a, b) => (b.percentage ?? 0) - (a.percentage ?? 0))[0];
+        if (matched && matched.percentage !== null) {
+          rec.finalTest = percentageToGrade5(matched.percentage);
+          changed = true;
+        }
+      }
+
+      if (!gradebook.midtermTestId && !gradebook.finalTestId) {
+        const best = studentSessions.sort((a, b) => (b.percentage ?? 0) - (a.percentage ?? 0))[0];
+        if (best && best.percentage !== null) {
+          rec.midtermTest = percentageToGrade5(best.percentage);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        nextRecords[key] = rec;
+        updatedCount++;
+      }
+    }
+
+    await persistGradebook(
+      { ...gradebook, records: nextRecords },
+      updatedCount > 0
+        ? `Обновлены оценки по тестам для ${updatedCount} студентов группы.`
+        : 'Подходящих завершённых тестов для этой группы пока нет.'
+    );
+  };
+
+  const handleExportGradebookCsv = () => {
+    if (!activeGradebookGroup) return;
+    const labsTotal = Math.max(1, gradebook.labsCount || 6);
+    const labHeaders = Array.from({ length: labsTotal }, (_, i) => `Лаб ${i + 1}`);
+    const headers = [
+      'Студент',
+      'Группа',
+      ...labHeaders,
+      'Промеж. тест',
+      'Посещаемость (%)',
+      'Статус итогового теста',
+      'Итоговый тест',
+      'Предзащита проекта',
+      'Оценка за семестр',
+    ];
+    const rows = activeGradebookGroup.students.map((st) => {
+      const rec = normalizeStudentRecord(
+        gradebook.records[makeGradebookKey(activeGradebookGroup.name, st)],
+        labsTotal
+      );
+      const sum = computeStudentSemesterSummary(rec, gradebook);
+      const finalReqLabel =
+        sum.needsFinalTest === null
+          ? 'Не указана посещ.'
+          : sum.needsFinalTest
+            ? 'Сдаёт (низкая посещ.)'
+            : 'Освобождён';
+      return [
+        st,
+        activeGradebookGroup.name,
+        ...rec.labs.map((l) => formatGradeValue(l)),
+        formatGradeValue(rec.midtermTest),
+        rec.attendance !== null ? `${rec.attendance}%` : '—',
+        finalReqLabel,
+        sum.needsFinalTest === false ? 'Освобождён' : formatGradeValue(rec.finalTest),
+        formatGradeValue(rec.projectDefense),
+        sum.semesterGradeLabel,
+      ];
+    });
+    const csv =
+      '\uFEFF' +
+      [headers, ...rows]
+        .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(';'))
+        .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vedomost-${activeGradebookGroup.name}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const groupNames = useMemo(() => {
     const set = new Set<string>(roster.map((g) => g.name));
@@ -578,7 +746,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   : 'border-transparent text-[#8EA0B0] hover:text-white'
               }`}
             >
-              Курс: отчёты и таймер ({allSubmissions.length})
+              Ведомость, зачёт и таймер
             </button>
             <button
               type="button"
@@ -1230,95 +1398,410 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
           </div>
         )}
 
-        {/* TAB 2: Course Submissions, Feedback & Global Classroom Timer */}
+        {/* TAB 2: Winter Semester Gradebook, Attendance, Defense Dates & Classroom Timer */}
         {activeTab === 'course' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* Left 8 cols: Student Mission Submissions */}
-            <div className="lg:col-span-8 space-y-6">
-              <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden">
-                <div className="px-5 py-4 border-b border-[#24303C] flex items-center justify-between">
-                  <h2 className="text-sm font-bold text-white">
-                    Сданные проекты по миссиям (GitHub)
+          <div className="space-y-6">
+            {/* Full-Width Group Gradebook Card */}
+            <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden">
+              <div className="p-5 border-b border-[#24303C] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-mono text-[#9ED164] mb-1">
+                    <GraduationCap className="w-4 h-4" />
+                    <span>{gradebook.semesterLabel} · Успеваемость и допуск</span>
+                  </div>
+                  <h2 className="text-base font-bold text-white">
+                    Ведомость студентов по группам
                   </h2>
-                  <span className="text-xs font-mono text-[#9ED164] tabular-nums">
-                    Всего: {allSubmissions.length}
-                  </span>
+                  <p className="text-xs text-[#9FB0C0] mt-0.5">
+                    Выставляйте оценки за 6 лаб, промежуточный тест, предзащиту и % посещаемости — необходимость итогового теста №2 и итоговая оценка считаются автоматически.
+                  </p>
                 </div>
 
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handlePullTestScores}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#344656] bg-[#11171D] text-xs font-medium text-[#CBEF9C] hover:border-[#9ED164] cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Подтянуть баллы из тестов</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportGradebookCsv}
+                    disabled={!activeGradebookGroup}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-[#344656] bg-[#11171D] text-xs font-medium text-[#D7E0E8] hover:border-[#9ED164] cursor-pointer disabled:opacity-40"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>CSV группы</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Semester Rules & Group Tabs */}
+              <div className="p-4 border-b border-[#24303C] bg-[#121820] space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {roster.map((grp) => (
+                      <button
+                        key={grp.id}
+                        type="button"
+                        onClick={() => setGradebookGroupId(grp.id)}
+                        className={`px-3.5 py-2 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                          activeGradebookGroup?.id === grp.id
+                            ? 'bg-[#213124] border-[#9ED164] text-[#CBEF9C]'
+                            : 'bg-[#161E27] border-[#2A3744] text-[#9FB0C0] hover:text-white'
+                        }`}
+                      >
+                        {grp.name} ({grp.students.length})
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-[#6C7E8E] absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={gradebookSearch}
+                      onChange={(e) => setGradebookSearch(e.target.value)}
+                      placeholder="Поиск студента..."
+                      className="bg-[#0F141A] border border-[#2A3744] rounded-md pl-8 pr-3 py-1.5 text-xs text-white placeholder-[#6C7E8E] focus:outline-none focus:border-[#9ED164]"
+                    />
+                  </div>
+                </div>
+
+                {/* Settings Bar: Attendance Threshold & Linked Tests */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                  <label className="flex items-center justify-between gap-2 px-3 py-2 rounded-md border border-[#24303C] bg-[#0F141A] text-xs">
+                    <span className="text-[#8EA0B0]">Порог посещ. (без тест №2):</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={gradebook.attendanceThreshold}
+                        onChange={(e) => {
+                          const val = Math.max(0, Math.min(100, Number(e.target.value) || 0));
+                          persistGradebook({ ...gradebook, attendanceThreshold: val });
+                        }}
+                        className="w-14 bg-[#161E27] border border-[#344656] rounded px-2 py-0.5 text-xs font-mono text-white text-center focus:outline-none focus:border-[#9ED164]"
+                      />
+                      <span className="font-mono text-[#8EA0B0]">%</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center justify-between gap-2 px-3 py-2 rounded-md border border-[#24303C] bg-[#0F141A] text-xs">
+                    <span className="text-[#8EA0B0]">Кол-во лаб:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={gradebook.labsCount}
+                      onChange={(e) => {
+                        const val = Math.max(1, Math.min(12, Number(e.target.value) || 6));
+                        persistGradebook({ ...gradebook, labsCount: val });
+                      }}
+                      className="w-14 bg-[#161E27] border border-[#344656] rounded px-2 py-0.5 text-xs font-mono text-white text-center focus:outline-none focus:border-[#9ED164]"
+                    />
+                  </label>
+
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-md border border-[#24303C] bg-[#0F141A] text-xs">
+                    <span className="text-[#8EA0B0] shrink-0">Промеж.:</span>
+                    <select
+                      value={gradebook.midtermTestId}
+                      onChange={(e) =>
+                        persistGradebook({ ...gradebook, midtermTestId: e.target.value })
+                      }
+                      className="flex-1 min-w-0 bg-[#161E27] border border-[#344656] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+                    >
+                      <option value="">Любой пройденный</option>
+                      {tests.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-md border border-[#24303C] bg-[#0F141A] text-xs">
+                    <span className="text-[#8EA0B0] shrink-0">Итоговый:</span>
+                    <select
+                      value={gradebook.finalTestId}
+                      onChange={(e) =>
+                        persistGradebook({ ...gradebook, finalTestId: e.target.value })
+                      }
+                      className="flex-1 min-w-0 bg-[#161E27] border border-[#344656] rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+                    >
+                      <option value="">Не привязан</option>
+                      {tests.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {gradebookMsg && (
+                  <div className="p-2.5 rounded border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
+                    {gradebookMsg}
+                  </div>
+                )}
+              </div>
+
+              {/* Group Gradebook Table */}
+              {activeGradebookGroup ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-[#24303C] bg-[#121820] text-[11px] font-mono text-[#8EA0B0]">
-                        <th className="py-3 px-4 font-medium">Студент</th>
-                        <th className="py-3 px-4 font-medium">Миссия</th>
-                        <th className="py-3 px-4 font-medium text-right">Репозиторий</th>
+                        <th className="py-3 px-4 font-medium min-w-[170px]">Студент</th>
+                        {Array.from({ length: Math.max(1, gradebook.labsCount || 6) }, (_, i) => (
+                          <th key={i} className="py-3 px-1.5 font-medium text-center">
+                            Л{i + 1}
+                          </th>
+                        ))}
+                        <th className="py-3 px-2 font-medium text-center">Промеж.</th>
+                        <th className="py-3 px-2 font-medium text-center">Посещ.%</th>
+                        <th className="py-3 px-3 font-medium min-w-[160px]">Итоговый тест №2</th>
+                        <th className="py-3 px-2 font-medium text-center">Предзащита</th>
+                        <th className="py-3 px-4 font-medium min-w-[175px]">Итог за семестр</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1F2A35] text-xs">
-                      {allSubmissions.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="py-10 text-center text-[#7C8D9C]">
-                            Отчёты по миссиям ещё не поступали.
-                          </td>
-                        </tr>
-                      ) : (
-                        allSubmissions.map((sub) => (
-                          <tr key={sub.id} className="hover:bg-[#1C2632]">
-                            <td className="py-3 px-4 font-semibold text-white">
-                              {sub.studentName}
-                            </td>
-                            <td className="py-3 px-4 text-[#D7E0E8]">
-                              {missionTitleMap.get(sub.topicId) || sub.topicId}
-                            </td>
-                            <td className="py-3 px-4 text-right">
-                              <a
-                                href={sub.repository}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 font-mono text-[#7CC4FA] hover:underline"
-                              >
-                                <span>Открыть</span>
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </a>
-                            </td>
-                          </tr>
-                        ))
-                      )}
+                      {activeGradebookGroup.students
+                        .filter((st) =>
+                          gradebookSearch.trim()
+                            ? st.toLowerCase().includes(gradebookSearch.trim().toLowerCase())
+                            : true
+                        )
+                        .map((studentName) => {
+                          const labsTotal = Math.max(1, gradebook.labsCount || 6);
+                          const key = makeGradebookKey(activeGradebookGroup.name, studentName);
+                          const rec = normalizeStudentRecord(gradebook.records[key], labsTotal);
+                          const summary = computeStudentSemesterSummary(rec, gradebook);
+
+                          const gradeCellSelectClass = (val: GradeValue) =>
+                            `rounded border px-1.5 py-1 text-xs font-mono text-center focus:outline-none focus:border-[#9ED164] cursor-pointer ${
+                              val === 5 || val === 'pass'
+                                ? 'bg-[#1D2D21] border-[#4E7A45] text-[#CBEF9C]'
+                                : val === 4
+                                  ? 'bg-[#172634] border-[#396187] text-[#9ED3FF]'
+                                  : val === 3
+                                    ? 'bg-[#261E14] border-[#78572D] text-[#F3D3A7]'
+                                    : val === 2
+                                      ? 'bg-[#2D181B] border-[#7D3A42] text-[#FFB8BE]'
+                                      : 'bg-[#0F141A] border-[#2A3744] text-[#7C8D9C]'
+                            }`;
+
+                          return (
+                            <tr key={studentName} className="hover:bg-[#1A2430]">
+                              <td className="py-2.5 px-4 font-semibold text-white">
+                                {studentName}
+                              </td>
+
+                              {rec.labs.map((labVal, idx) => (
+                                <td key={idx} className="py-2.5 px-1 text-center">
+                                  <select
+                                    value={encodeGradeSelect(labVal)}
+                                    onChange={(e) =>
+                                      updateStudentGradeField(
+                                        activeGradebookGroup.name,
+                                        studentName,
+                                        (prev) => {
+                                          const nextLabs = [...prev.labs];
+                                          nextLabs[idx] = parseGradeSelect(e.target.value);
+                                          return { ...prev, labs: nextLabs };
+                                        }
+                                      )
+                                    }
+                                    className={gradeCellSelectClass(labVal)}
+                                  >
+                                    <option value="">—</option>
+                                    <option value="5">5</option>
+                                    <option value="4">4</option>
+                                    <option value="3">3</option>
+                                    <option value="2">2</option>
+                                    <option value="pass">Зч</option>
+                                  </select>
+                                </td>
+                              ))}
+
+                              <td className="py-2.5 px-2 text-center">
+                                <select
+                                  value={encodeGradeSelect(rec.midtermTest)}
+                                  onChange={(e) =>
+                                    updateStudentGradeField(
+                                      activeGradebookGroup.name,
+                                      studentName,
+                                      (prev) => ({
+                                        ...prev,
+                                        midtermTest: parseGradeSelect(e.target.value),
+                                      })
+                                    )
+                                  }
+                                  className={gradeCellSelectClass(rec.midtermTest)}
+                                >
+                                  <option value="">—</option>
+                                  <option value="5">5</option>
+                                  <option value="4">4</option>
+                                  <option value="3">3</option>
+                                  <option value="2">2</option>
+                                </select>
+                              </td>
+
+                              <td className="py-2.5 px-2 text-center">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  placeholder="—"
+                                  value={rec.attendance === null ? '' : rec.attendance}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const parsed =
+                                      raw === ''
+                                        ? null
+                                        : Math.max(0, Math.min(100, Math.round(Number(raw))));
+                                    updateStudentGradeField(
+                                      activeGradebookGroup.name,
+                                      studentName,
+                                      (prev) => ({ ...prev, attendance: parsed })
+                                    );
+                                  }}
+                                  className={`w-14 rounded border px-1.5 py-1 text-xs font-mono text-center focus:outline-none focus:border-[#9ED164] tabular-nums ${
+                                    rec.attendance === null
+                                      ? 'bg-[#0F141A] border-[#2A3744] text-[#7C8D9C]'
+                                      : rec.attendance >= gradebook.attendanceThreshold
+                                        ? 'bg-[#1D2D21] border-[#4E7A45] text-[#CBEF9C]'
+                                        : 'bg-[#261E14] border-[#78572D] text-[#F3D3A7]'
+                                  }`}
+                                />
+                              </td>
+
+                              <td className="py-2.5 px-3">
+                                {summary.needsFinalTest === null ? (
+                                  <span className="text-[11px] font-mono text-[#7C8D9C]">
+                                    Укажите посещ. %
+                                  </span>
+                                ) : summary.needsFinalTest === false ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#1D2D21] border border-[#4E7A45] text-[11px] font-mono text-[#CBEF9C]">
+                                    Освобождён
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[11px] font-mono text-[#F3D3A7]">
+                                      Сдаёт:
+                                    </span>
+                                    <select
+                                      value={encodeGradeSelect(rec.finalTest)}
+                                      onChange={(e) =>
+                                        updateStudentGradeField(
+                                          activeGradebookGroup.name,
+                                          studentName,
+                                          (prev) => ({
+                                            ...prev,
+                                            finalTest: parseGradeSelect(e.target.value),
+                                          })
+                                        )
+                                      }
+                                      className={gradeCellSelectClass(rec.finalTest)}
+                                    >
+                                      <option value="">—</option>
+                                      <option value="5">5</option>
+                                      <option value="4">4</option>
+                                      <option value="3">3</option>
+                                      <option value="2">2</option>
+                                    </select>
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="py-2.5 px-2 text-center">
+                                <select
+                                  value={encodeGradeSelect(rec.projectDefense)}
+                                  onChange={(e) =>
+                                    updateStudentGradeField(
+                                      activeGradebookGroup.name,
+                                      studentName,
+                                      (prev) => ({
+                                        ...prev,
+                                        projectDefense: parseGradeSelect(e.target.value),
+                                      })
+                                    )
+                                  }
+                                  className={gradeCellSelectClass(rec.projectDefense)}
+                                >
+                                  <option value="">—</option>
+                                  <option value="5">5</option>
+                                  <option value="4">4</option>
+                                  <option value="3">3</option>
+                                  <option value="2">2</option>
+                                  <option value="pass">Зч</option>
+                                </select>
+                              </td>
+
+                              <td className="py-2.5 px-4">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <div
+                                      className={`font-semibold ${
+                                        summary.isEligibleForPass
+                                          ? 'text-[#9ED164]'
+                                          : summary.semesterGradeShort === 'Долг'
+                                            ? 'text-[#FFB8BE]'
+                                            : 'text-[#8EA0B0]'
+                                      }`}
+                                    >
+                                      {summary.semesterGradeLabel}
+                                    </div>
+                                    {summary.missingItems.length > 0 && (
+                                      <div className="text-[10px] text-[#7C8D9C] truncate max-w-[150px]">
+                                        {summary.missingItems.join(', ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <select
+                                    value={rec.manualSemesterGrade || ''}
+                                    onChange={(e) =>
+                                      updateStudentGradeField(
+                                        activeGradebookGroup.name,
+                                        studentName,
+                                        (prev) => ({
+                                          ...prev,
+                                          manualSemesterGrade: e.target.value || null,
+                                        })
+                                      )
+                                    }
+                                    title="Авто или ручная корректировка итога"
+                                    className="bg-[#0F141A] border border-[#2A3744] rounded px-1.5 py-0.5 text-[11px] font-mono text-[#9FB0C0] focus:outline-none focus:border-[#9ED164]"
+                                  >
+                                    <option value="">Авто</option>
+                                    <option value="5">5</option>
+                                    <option value="4">4</option>
+                                    <option value="3">3</option>
+                                    <option value="2">2</option>
+                                    <option value="Зачёт">Зачёт</option>
+                                    <option value="Незачёт">Незачёт</option>
+                                  </select>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
-              </div>
-
-              {/* Feedback list */}
-              <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden">
-                <div className="px-5 py-4 border-b border-[#24303C] flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className="w-4 h-4 text-[#9ED164]" />
-                    <h2 className="text-sm font-bold text-white">Идеи и отзывы студентов</h2>
-                  </div>
-                  <span className="text-xs font-mono text-[#8EA0B0] tabular-nums">
-                    {allFeedback.length}
-                  </span>
+              ) : (
+                <div className="p-8 text-center text-xs text-[#8EA0B0]">
+                  Добавьте учебную группу во вкладке «Группы и студенты».
                 </div>
-                <div className="divide-y divide-[#1F2A35]">
-                  {allFeedback.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-[#7C8D9C]">
-                      Предложений пока нет.
-                    </div>
-                  ) : (
-                    allFeedback.map((fb) => (
-                      <div key={fb.id} className="px-5 py-3.5 space-y-1 text-xs">
-                        <div className="font-semibold text-white">{fb.studentName}</div>
-                        <p className="text-[#B7C5D3] leading-relaxed">{fb.feedback}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+              )}
             </div>
 
-            {/* Right 4 cols: Global Classroom Timer Control */}
-            <div className="lg:col-span-4 space-y-4">
+            {/* Secondary Row: Global Classroom Timer, Project Defense Dates, Student Feedback */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Global Classroom Timer Control */}
               <div className="p-5 rounded-xl border border-[#24303C] bg-[#161E27] space-y-4">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1390,18 +1873,18 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="text-sm font-bold text-white flex items-center gap-2">
                     <Presentation className="w-4 h-4 text-[#9ED164]" />
-                    <span>Защита проектов (1 семестр)</span>
+                    <span>Предзащита проектов (1 семестр)</span>
                   </h2>
                   <button
                     type="button"
                     onClick={onOpenProjectGuide}
                     className="text-xs font-mono text-[#9ED164] hover:underline cursor-pointer"
                   >
-                    Открыть методичку
+                    Методичка
                   </button>
                 </div>
                 <p className="text-xs text-[#9FB0C0] leading-relaxed">
-                  Назначьте индивидуальные даты защиты презентаций для каждой группы.
+                  Назначьте индивидуальные даты предзащиты презентаций для каждой группы.
                 </p>
                 {guideSaveMsg && (
                   <div className="p-2.5 rounded border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
@@ -1437,6 +1920,33 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                       </div>
                     );
                   })}
+                </div>
+              </div>
+
+              {/* Feedback list */}
+              <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden flex flex-col max-h-[460px]">
+                <div className="px-5 py-4 border-b border-[#24303C] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-[#9ED164]" />
+                    <h2 className="text-sm font-bold text-white">Идеи и отзывы студентов</h2>
+                  </div>
+                  <span className="text-xs font-mono text-[#8EA0B0] tabular-nums">
+                    {allFeedback.length}
+                  </span>
+                </div>
+                <div className="divide-y divide-[#1F2A35] overflow-y-auto flex-1">
+                  {allFeedback.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[#7C8D9C]">
+                      Предложений пока нет.
+                    </div>
+                  ) : (
+                    allFeedback.map((fb) => (
+                      <div key={fb.id} className="px-5 py-3.5 space-y-1 text-xs">
+                        <div className="font-semibold text-white">{fb.studentName}</div>
+                        <p className="text-[#B7C5D3] leading-relaxed">{fb.feedback}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

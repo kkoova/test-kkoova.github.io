@@ -117,7 +117,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
                 : 'border-transparent hover:text-white'
             }`}
           >
-            Защита проекта
+            Зачёт и проект
           </button>
           <button
             type="button"
@@ -247,7 +247,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
             activeSection === 'project' ? 'text-[#9ED164] font-semibold' : ''
           }`}
         >
-          Защита проекта
+          Зачёт и проект
         </button>
         <button
           type="button"
