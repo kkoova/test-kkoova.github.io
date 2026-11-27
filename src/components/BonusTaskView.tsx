@@ -1,16 +1,25 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Award,
   CheckCircle2,
   Code2,
+  Edit3,
   FolderGit2,
+  RotateCcw,
+  Save,
   Send,
   Sparkles,
+  Trash2,
+  Users,
   XCircle,
 } from 'lucide-react';
 import { GroupRoster } from '../data/defaultRoster';
 import {
+  BonusConfig,
   BonusSubmission,
+  DEFAULT_BONUS_CONFIG,
+  deleteBonusSubmission,
+  saveBonusConfig,
   submitBonusAssignment,
 } from '../services/courseService';
 
@@ -31,7 +40,11 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
     prompt: 'Почему этот скрипт выдаёт ошибку в Godot 4 и не двигает CharacterBody2D?',
     code: `extends CharacterBody2D\n\nfunc _physics_process(delta):\n    var dir = Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")\n    velocity = move_and_slide(dir * 250)`,
     options: [
-      { key: 'A', label: 'В Godot 4 move_and_slide() не принимает аргументы — сначала нужно присвоить velocity = dir * 250, а затем вызвать move_and_slide()' },
+      {
+        key: 'A',
+        label:
+          'В Godot 4 move_and_slide() не принимает аргументы — сначала нужно присвоить velocity = dir * 250, а затем вызвать move_and_slide()',
+      },
       { key: 'B', label: 'Нужно заменить _physics_process на _ready' },
       { key: 'C', label: 'Input.get_vector возвращает строку вместо Vector2' },
     ],
@@ -56,7 +69,8 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
   {
     id: 3,
     title: 'Сохранение рекорда на телефон',
-    prompt: 'Какой путь нужно использовать для записи файла рекорда, чтобы он работал на Android и в браузере?',
+    prompt:
+      'Какой путь нужно использовать для записи файла рекорда, чтобы он работал на Android и в браузере?',
     code: `var cfg = ConfigFile.new()\ncfg.set_value("progress", "best_score", score)\ncfg.save(???)`,
     options: [
       { key: 'A', label: '"res://save.cfg"' },
@@ -73,7 +87,10 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
     prompt: 'Пули улетают за пределы экрана и продолжают жить бесконечно. Как это исправить?',
     code: `extends Area2D\n# Узел VisibleOnScreenNotifier2D добавлен как дочерний`,
     options: [
-      { key: 'A', label: 'Подключить сигнал screen_exited() у VisibleOnScreenNotifier2D и вызвать queue_free()' },
+      {
+        key: 'A',
+        label: 'Подключить сигнал screen_exited() у VisibleOnScreenNotifier2D и вызвать queue_free()',
+      },
       { key: 'B', label: 'Вызвать hide() в _ready()' },
       { key: 'C', label: 'Поставить get_tree().paused = true' },
     ],
@@ -84,7 +101,8 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
   {
     id: 5,
     title: 'Независимость от FPS',
-    prompt: 'В _process(delta) объект перемещается строкой position.x += 5. Почему на 120 Гц он бежит в 2 раза быстрее, чем на 60 Гц?',
+    prompt:
+      'В _process(delta) объект перемещается строкой position.x += 5. Почему на 120 Гц он бежит в 2 раза быстрее, чем на 60 Гц?',
     code: `func _process(delta):\n    position.x += 5`,
     options: [
       { key: 'A', label: 'Не умножено на delta — нужно position.x += speed * delta' },
@@ -100,13 +118,21 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
 interface BonusTaskViewProps {
   roster: GroupRoster[];
   defaultStudentHint?: string | null;
+  isAdmin: boolean;
+  bonusConfig: BonusConfig;
+  bonusSubmissions: BonusSubmission[];
 }
 
 export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
   roster,
   defaultStudentHint,
+  isAdmin,
+  bonusConfig,
+  bonusSubmissions,
 }) => {
-  const [mode, setMode] = useState<'quiz' | 'project'>('quiz');
+  const [mode, setMode] = useState<'quiz' | 'project'>(() =>
+    bonusConfig.showQuiz ? 'quiz' : 'project'
+  );
   const [selectedGroup, setSelectedGroup] = useState<string>(roster[0]?.name || '');
   const [selectedStudent, setSelectedStudent] = useState<string>(() => {
     if (!defaultStudentHint) return '';
@@ -117,6 +143,31 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
     }
     return '';
   });
+
+  // Teacher editor state
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [draftConfig, setDraftConfig] = useState<BonusConfig>(bonusConfig);
+  const [requirementsText, setRequirementsText] = useState<string>(
+    bonusConfig.projectRequirements.join('\n')
+  );
+  const [editorMsg, setEditorMsg] = useState<string | null>(null);
+  const [savingConfig, setSavingConfig] = useState(false);
+
+  // Results filter
+  const [resultsGroupFilter, setResultsGroupFilter] = useState<string>('all');
+
+  useEffect(() => {
+    setDraftConfig(bonusConfig);
+    setRequirementsText(bonusConfig.projectRequirements.join('\n'));
+  }, [bonusConfig]);
+
+  useEffect(() => {
+    if (mode === 'quiz' && !bonusConfig.showQuiz && bonusConfig.showProject) {
+      setMode('project');
+    } else if (mode === 'project' && !bonusConfig.showProject && bonusConfig.showQuiz) {
+      setMode('quiz');
+    }
+  }, [mode, bonusConfig.showQuiz, bonusConfig.showProject]);
 
   // Mode A: 5-question interactive bonus challenge
   const [answers, setAnswers] = useState<Record<number, string>>({});
@@ -145,6 +196,54 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
 
   const allQuizAnswered = BONUS_CHALLENGES.every((q) => Boolean(answers[q.id]));
 
+  const filteredSubmissions = useMemo(() => {
+    return bonusSubmissions.filter((b) => {
+      if (!bonusConfig.showResultsToStudents && !isAdmin) {
+        if (!selectedStudent) return false;
+        if (b.studentName !== selectedStudent) return false;
+      }
+      if (resultsGroupFilter !== 'all' && b.group !== resultsGroupFilter) return false;
+      return true;
+    });
+  }, [bonusSubmissions, bonusConfig.showResultsToStudents, isAdmin, selectedStudent, resultsGroupFilter]);
+
+  const handleSaveEditor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingConfig(true);
+    const reqs = requirementsText
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const nextConfig: BonusConfig = {
+      ...draftConfig,
+      projectRequirements: reqs,
+    };
+    try {
+      await saveBonusConfig(nextConfig);
+      setEditorMsg('Настройки дополнительного задания сохранены для всех студентов.');
+    } catch {
+      setEditorMsg('Сохранено локально (проверьте права записи Firestore).');
+    } finally {
+      setSavingConfig(false);
+      window.setTimeout(() => setEditorMsg(null), 3500);
+    }
+  };
+
+  const handleResetEditor = async () => {
+    setSavingConfig(true);
+    try {
+      await saveBonusConfig(DEFAULT_BONUS_CONFIG);
+      setDraftConfig(DEFAULT_BONUS_CONFIG);
+      setRequirementsText(DEFAULT_BONUS_CONFIG.projectRequirements.join('\n'));
+      setEditorMsg('Восстановлены стандартные настройки доп. задания.');
+    } catch {
+      setEditorMsg('Восстановлено локально.');
+    } finally {
+      setSavingConfig(false);
+      window.setTimeout(() => setEditorMsg(null), 3500);
+    }
+  };
+
   const handleSubmitQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGroup || !selectedStudent) {
@@ -162,7 +261,7 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
     const total = BONUS_CHALLENGES.length;
     const percentage = Math.round((score / total) * 100);
     let gradeLabel = 'Не зачтено (нужно ≥3 из 5)';
-    if (score === 5) gradeLabel = 'Отлично (5) · +1 балл к практике';
+    if (score === 5) gradeLabel = 'Отлично (5) · 100% зачёт';
     else if (score === 4) gradeLabel = 'Хорошо (4) · зачёт доп. задания';
     else if (score === 3) gradeLabel = 'Удовлетворительно (3)';
 
@@ -223,6 +322,8 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
     }
   };
 
+  const showBothDisabled = !bonusConfig.showQuiz && !bonusConfig.showProject;
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       {/* Header */}
@@ -230,89 +331,326 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-2 text-xs font-mono text-[#9ED164]">
             <Award className="w-4 h-4" />
-            <span>Дополнительное задание на оценку</span>
+            <span>{bonusConfig.heroBadge}</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">
-            Заработать дополнительную «5» или закрыть долг
-          </h1>
+          <h1 className="text-2xl font-bold text-white">{bonusConfig.heroTitle}</h1>
           <p className="text-xs text-[#9FB0C0] max-w-2xl leading-relaxed">
-            Выберите формат: быстрый код-челлендж по Godot 4 прямо в браузере (автопроверка) или практическая доработка любой игры эффектами Game Feel. Результат сразу попадает преподавателю.
+            {bonusConfig.heroSubtitle}
           </p>
         </div>
 
-        <div className="inline-flex p-1 rounded-lg bg-[#11171D] border border-[#26323F] shrink-0 self-start">
-          <button
-            type="button"
-            onClick={() => setMode('quiz')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
-              mode === 'quiz'
-                ? 'bg-[#9ED164] text-[#111912]'
-                : 'text-[#9FB0C0] hover:text-white'
-            }`}
-          >
-            <Code2 className="w-3.5 h-3.5" />
-            <span>Код-челлендж (5 задач)</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('project')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
-              mode === 'project'
-                ? 'bg-[#9ED164] text-[#111912]'
-                : 'text-[#9FB0C0] hover:text-white'
-            }`}
-          >
-            <FolderGit2 className="w-3.5 h-3.5" />
-            <span>ТЗ на GitHub (Game Feel)</span>
-          </button>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start">
+          {(bonusConfig.showQuiz || bonusConfig.showProject) && (
+            <div className="inline-flex p-1 rounded-lg bg-[#11171D] border border-[#26323F]">
+              {bonusConfig.showQuiz && (
+                <button
+                  type="button"
+                  onClick={() => setMode('quiz')}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                    mode === 'quiz'
+                      ? 'bg-[#9ED164] text-[#111912]'
+                      : 'text-[#9FB0C0] hover:text-white'
+                  }`}
+                >
+                  <Code2 className="w-3.5 h-3.5" />
+                  <span>{bonusConfig.quizTabLabel}</span>
+                </button>
+              )}
+              {bonusConfig.showProject && (
+                <button
+                  type="button"
+                  onClick={() => setMode('project')}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                    mode === 'project'
+                      ? 'bg-[#9ED164] text-[#111912]'
+                      : 'text-[#9FB0C0] hover:text-white'
+                  }`}
+                >
+                  <FolderGit2 className="w-3.5 h-3.5" />
+                  <span>{bonusConfig.projectTabLabel}</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setEditorOpen((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+                editorOpen
+                  ? 'border-[#E5A454] bg-[#251E15] text-[#F3D3A7]'
+                  : 'border-[#344656] bg-[#11171D] text-[#D7E0E8] hover:border-[#9ED164]'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>{editorOpen ? 'Скрыть редактор' : 'Редактировать'}</span>
+            </button>
+          )}
         </div>
       </section>
+
+      {/* Teacher Inline Config Editor */}
+      {isAdmin && editorOpen && (
+        <form
+          onSubmit={handleSaveEditor}
+          className="rounded-xl border border-[#E5A454]/50 bg-[#181B20] p-6 space-y-5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2A3744] pb-3">
+            <div>
+              <div className="text-xs font-mono text-[#E5A454]">Режим преподавателя</div>
+              <h2 className="text-base font-bold text-white">
+                Редактирование текста и видимости блоков
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetEditor}
+              disabled={savingConfig}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#344656] bg-[#11171D] text-xs text-[#9FB0C0] hover:text-white cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Сбросить по умолчанию</span>
+            </button>
+          </div>
+
+          {editorMsg && (
+            <div className="p-3 rounded-lg border border-[#5D8247] bg-[#213124] text-xs text-[#CBEF9C]">
+              {editorMsg}
+            </div>
+          )}
+
+          {/* Visibility Toggles */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="flex items-center gap-2.5 p-3 rounded-lg border border-[#2A3744] bg-[#11171D] text-xs text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draftConfig.showQuiz}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, showQuiz: e.target.checked }))
+                }
+                className="accent-[#9ED164]"
+              />
+              <span>Показывать «Код-челлендж»</span>
+            </label>
+
+            <label className="flex items-center gap-2.5 p-3 rounded-lg border border-[#2A3744] bg-[#11171D] text-xs text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draftConfig.showProject}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, showProject: e.target.checked }))
+                }
+                className="accent-[#9ED164]"
+              />
+              <span>Показывать «ТЗ на GitHub»</span>
+            </label>
+
+            <label className="flex items-center gap-2.5 p-3 rounded-lg border border-[#2A3744] bg-[#11171D] text-xs text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draftConfig.showResultsToStudents}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({
+                    ...prev,
+                    showResultsToStudents: e.target.checked,
+                  }))
+                }
+                className="accent-[#9ED164]"
+              />
+              <span>Показывать таблицу результатов студентам</span>
+            </label>
+          </div>
+
+          {/* Editable Header & Tabs */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Надзаголовок
+              </label>
+              <input
+                type="text"
+                value={draftConfig.heroBadge}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, heroBadge: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Главный заголовок
+              </label>
+              <input
+                type="text"
+                value={draftConfig.heroTitle}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, heroTitle: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Описание под заголовком
+              </label>
+              <textarea
+                rows={2}
+                value={draftConfig.heroSubtitle}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, heroSubtitle: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Название вкладки 1 (Код-челлендж)
+              </label>
+              <input
+                type="text"
+                value={draftConfig.quizTabLabel}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, quizTabLabel: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Название вкладки 2 (Практическое ТЗ)
+              </label>
+              <input
+                type="text"
+                value={draftConfig.projectTabLabel}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, projectTabLabel: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+          </div>
+
+          {/* Editable Project Details */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#24303C]">
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Бейдж практического ТЗ
+              </label>
+              <input
+                type="text"
+                value={draftConfig.projectBadge}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, projectBadge: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Заголовок практического ТЗ
+              </label>
+              <input
+                type="text"
+                value={draftConfig.projectTitle}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, projectTitle: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Вводный текст ТЗ
+              </label>
+              <textarea
+                rows={2}
+                value={draftConfig.projectSubtitle}
+                onChange={(e) =>
+                  setDraftConfig((prev) => ({ ...prev, projectSubtitle: e.target.value }))
+                }
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1">
+                Пункты требований ТЗ (каждый пункт с новой строки)
+              </label>
+              <textarea
+                rows={4}
+                value={requirementsText}
+                onChange={(e) => setRequirementsText(e.target.value)}
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={savingConfig}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-bold hover:bg-[#B4E07F] cursor-pointer disabled:opacity-50"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{savingConfig ? 'Сохранение...' : 'Сохранить изменения'}</span>
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* Student Identification Bar */}
-      <section className="rounded-xl border border-[#2A3744] bg-[#161E27] p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
-            Ваша учебная группа
-          </label>
-          <select
-            value={selectedGroup}
-            onChange={(e) => {
-              setSelectedGroup(e.target.value);
-              setSelectedStudent('');
-            }}
-            className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164]"
-          >
-            <option value="">— Выберите группу —</option>
-            {roster.map((g) => (
-              <option key={g.id} value={g.name}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      {!showBothDisabled && (
+        <section className="rounded-xl border border-[#2A3744] bg-[#161E27] p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
+              Ваша учебная группа
+            </label>
+            <select
+              value={selectedGroup}
+              onChange={(e) => {
+                setSelectedGroup(e.target.value);
+                setSelectedStudent('');
+              }}
+              className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164]"
+            >
+              <option value="">— Выберите группу —</option>
+              {roster.map((g) => (
+                <option key={g.id} value={g.name}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <div>
-          <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
-            Фамилия и имя
-          </label>
-          <select
-            value={selectedStudent}
-            disabled={!selectedGroup}
-            onChange={(e) => setSelectedStudent(e.target.value)}
-            className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164] disabled:opacity-45"
-          >
-            <option value="">— Выберите ваше ФИО —</option>
-            {studentsInGroup.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
+              Фамилия и имя
+            </label>
+            <select
+              value={selectedStudent}
+              disabled={!selectedGroup}
+              onChange={(e) => setSelectedStudent(e.target.value)}
+              className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164] disabled:opacity-45"
+            >
+              <option value="">— Выберите ваше ФИО —</option>
+              {studentsInGroup.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+      )}
+
+      {showBothDisabled && (
+        <div className="rounded-xl border border-[#2A3744] bg-[#161E27] p-8 text-center text-xs text-[#9FB0C0]">
+          Форматы дополнительного задания сейчас скрыты преподавателем. Проверьте результаты ниже или загляните позже.
         </div>
-      </section>
+      )}
 
       {/* Mode A: Interactive 5-Challenge Quiz */}
-      {mode === 'quiz' && (
+      {bonusConfig.showQuiz && mode === 'quiz' && (
         <form onSubmit={handleSubmitQuiz} className="space-y-4">
           {BONUS_CHALLENGES.map((q, idx) => {
             const picked = answers[q.id];
@@ -446,25 +784,18 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
       )}
 
       {/* Mode B: Practical Game Feel Project Task */}
-      {mode === 'project' && (
+      {bonusConfig.showProject && mode === 'project' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <section className="lg:col-span-7 rounded-xl border border-[#2A3744] bg-[#161E27] p-6 space-y-4">
             <div className="text-xs font-mono text-[#E5A454]">
-              Практическое ТЗ · Бонус-оценка «5»
+              {bonusConfig.projectBadge}
             </div>
-            <h2 className="text-xl font-bold text-white">
-              Миссия «Game Feel & Juice Pack» для любой вашей игры
-            </h2>
+            <h2 className="text-xl font-bold text-white">{bonusConfig.projectTitle}</h2>
             <p className="text-xs text-[#A9B9C8] leading-relaxed">
-              Возьмите любой свой проект из курса (Лабиринт, Кликер, Тетрис или Рыбалку) и добавьте 4 элемента «сочности» игры:
+              {bonusConfig.projectSubtitle}
             </p>
             <div className="space-y-2.5 text-xs">
-              {[
-                '1. Плавный отклик UI через create_tween() (пружинка при нажатии кнопок или появлении окна).',
-                '2. Эффект тряски камеры (Camera Shake) или вспышки при важном событии / столкновении.',
-                '3. Частицы (GPUParticles2D или CPUParticles2D) + минимум 2 звуковых эффекта через AudioStreamPlayer.',
-                '4. Сохранение лучшего результата в user:// через ConfigFile или JSON, чтобы рекорд не сбрасывался после перезапуска.',
-              ].map((item, i) => (
+              {bonusConfig.projectRequirements.map((item, i) => (
                 <div
                   key={i}
                   className="p-3 rounded-lg border border-[#24303C] bg-[#11171D] text-[#D7E0E8]"
@@ -529,6 +860,87 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
             </button>
           </form>
         </div>
+      )}
+
+      {/* Student Submissions & Results Board */}
+      {(isAdmin || bonusConfig.showResultsToStudents || filteredSubmissions.length > 0) && (
+        <section className="rounded-xl border border-[#2A3744] bg-[#161E27] overflow-hidden">
+          <div className="px-6 py-4 border-b border-[#24303C] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <Users className="w-4 h-4 text-[#9ED164]" />
+              <h2 className="text-base font-bold text-white">
+                Результаты студентов ({filteredSubmissions.length})
+              </h2>
+            </div>
+
+            <select
+              value={resultsGroupFilter}
+              onChange={(e) => setResultsGroupFilter(e.target.value)}
+              className="bg-[#0F141A] border border-[#344656] rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+            >
+              <option value="all">Все группы</option>
+              {roster.map((g) => (
+                <option key={g.id} value={g.name}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {filteredSubmissions.length === 0 ? (
+            <div className="p-8 text-center text-xs text-[#7C8D9C]">
+              {!bonusConfig.showResultsToStudents && !isAdmin && !selectedStudent
+                ? 'Выберите ваше ФИО выше, чтобы увидеть ваши результаты.'
+                : 'Отправленных дополнительных заданий пока нет.'}
+            </div>
+          ) : (
+            <div className="divide-y divide-[#1F2A35] max-h-[380px] overflow-y-auto">
+              {filteredSubmissions.map((b) => (
+                <div
+                  key={b.id}
+                  className="px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-1 min-w-0">
+                    <div className="font-semibold text-white">
+                      {b.studentName} · <span className="text-[#8EA0B0]">{b.group}</span>
+                    </div>
+                    <div className="text-[#9FB0C0]">
+                      {b.kind === 'quiz'
+                        ? `Код-челлендж: ${b.score}/${b.total} (${b.percentage}%)`
+                        : `Проект GitHub: ${b.note || 'Без комментария'}`}
+                    </div>
+                    {b.repoLink && (
+                      <a
+                        href={b.repoLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block font-mono text-[#7CC4FA] hover:underline break-all"
+                      >
+                        {b.repoLink}
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="px-2.5 py-1 rounded border border-[#5D8247] bg-[#213124] font-mono text-[11px] text-[#CBEF9C]">
+                      {b.gradeLabel}
+                    </span>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => void deleteBonusSubmission(b.id)}
+                        title="Удалить результат"
+                        className="p-1.5 rounded border border-[#344656] bg-[#11171D] text-[#8EA0B0] hover:text-[#E06C75] cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
     </div>
   );

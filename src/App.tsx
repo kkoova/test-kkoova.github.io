@@ -34,16 +34,21 @@ import {
   ViolationType,
 } from './services/telemetryService';
 import {
+  BonusConfig,
   BonusSubmission,
   FeedbackEntry,
   GlobalTimerState,
   LessonData,
   Mission,
+  readLocalBonusConfig,
   subscribeAllFeedback,
+  subscribeBonusConfig,
   subscribeBonusSubmissions,
   subscribeCustomDocs,
   subscribeGlobalTimer,
   subscribeMissions,
+  subscribeWheelSpins,
+  WheelSpinRecord,
 } from './services/courseService';
 import { PortalHeader } from './components/PortalHeader';
 import { CoursePortalView } from './components/CoursePortalView';
@@ -146,6 +151,8 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
   const [allFeedback, setAllFeedback] = useState<FeedbackEntry[]>([]);
   const [bonusSubmissions, setBonusSubmissions] = useState<BonusSubmission[]>([]);
+  const [bonusConfig, setBonusConfig] = useState<BonusConfig>(() => readLocalBonusConfig());
+  const [wheelSpins, setWheelSpins] = useState<WheelSpinRecord[]>([]);
 
   // Active Student Test state
   const [activeTest, setActiveTest] = useState<TestDefinition | null>(null);
@@ -196,13 +203,15 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // 2. Subscribe to Missions (data.json + teacher web overrides) & Custom Docs
+  // 2. Subscribe to Missions (data.json + teacher web overrides), Custom Docs & Bonus Config
   useEffect(() => {
     const unsubMissions = subscribeMissions(setMissions, setMissionsError);
     const unsubDocs = subscribeCustomDocs(setCustomDocs);
+    const unsubBonusCfg = subscribeBonusConfig(setBonusConfig);
     return () => {
       unsubMissions();
       unsubDocs();
+      unsubBonusCfg();
     };
   }, []);
 
@@ -227,24 +236,35 @@ export default function App() {
     };
   }, []);
 
-  // 5. Subscribe to Admin Telemetry, Course Feedback & Bonus Submissions
+  // 5. Subscribe to Admin Telemetry, Course Feedback, Bonus Submissions & Wheel Spins
   useEffect(() => {
-    if (!isAdmin && view !== 'admin' && view !== 'monitor' && !profileOpen) return;
-    const unsubTel = subscribeTelemetry({
-      onSessions: setSessions,
-      onViolations: setViolationsFeed,
-      onStatus: setSyncStatus,
-    });
+    let unsubTel = () => {};
     let unsubFeed = () => {};
     let unsubBonus = () => {};
+    let unsubWheel = () => {};
+
+    if (isAdmin || view === 'admin' || view === 'monitor' || profileOpen) {
+      unsubTel = subscribeTelemetry({
+        onSessions: setSessions,
+        onViolations: setViolationsFeed,
+        onStatus: setSyncStatus,
+      });
+    }
     if (isAdmin) {
       unsubFeed = subscribeAllFeedback(setAllFeedback);
+    }
+    if (isAdmin || view === 'bonus' || view === 'admin') {
       unsubBonus = subscribeBonusSubmissions(setBonusSubmissions);
     }
+    if (isAdmin || view === 'casino' || view === 'admin') {
+      unsubWheel = subscribeWheelSpins(setWheelSpins);
+    }
+
     return () => {
       unsubTel();
       unsubFeed();
       unsubBonus();
+      unsubWheel();
     };
   }, [isAdmin, view, profileOpen]);
 
@@ -575,6 +595,7 @@ export default function App() {
           gradebook={gradebook}
           allFeedback={allFeedback}
           bonusSubmissions={bonusSubmissions}
+          wheelSpins={wheelSpins}
           missions={missions}
           customDocs={customDocs}
           globalTimer={globalTimer}
@@ -794,11 +815,21 @@ export default function App() {
           <BonusTaskView
             roster={roster}
             defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
+            isAdmin={isAdmin}
+            bonusConfig={bonusConfig}
+            bonusSubmissions={bonusSubmissions}
           />
         ) : view === 'adhd' ? (
           <AdhdZoneView missions={missions} />
         ) : view === 'casino' ? (
           <GradeCasinoView
+            isSignedIn={isSignedIn}
+            userUid={studentViewMode ? 'teacher_student_preview' : firebaseUser?.uid || null}
+            userName={userLabel}
+            labsCount={gradebook.labsCount || 6}
+            wheelSpins={wheelSpins}
+            authLoading={authLoading}
+            onSignIn={handleGitHubSignIn}
             onOpenBonus={() => setView('bonus')}
             onOpenTests={() => setView('test_start')}
           />

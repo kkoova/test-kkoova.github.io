@@ -79,6 +79,58 @@ export interface BonusSubmission {
   timestampMs: number;
 }
 
+export interface BonusConfig {
+  heroBadge: string;
+  heroTitle: string;
+  heroSubtitle: string;
+  showQuiz: boolean;
+  quizTabLabel: string;
+  showProject: boolean;
+  projectTabLabel: string;
+  projectBadge: string;
+  projectTitle: string;
+  projectSubtitle: string;
+  projectRequirements: string[];
+  showResultsToStudents: boolean;
+}
+
+export const DEFAULT_BONUS_CONFIG: BonusConfig = {
+  heroBadge: 'Дополнительное задание на оценку',
+  heroTitle: 'Заработать дополнительную «5» или закрыть долг',
+  heroSubtitle:
+    'Выберите формат: быстрый код-челлендж по Godot 4 прямо в браузере (автопроверка) или практическая доработка любой игры эффектами Game Feel. Результат сразу попадает преподавателю.',
+  showQuiz: true,
+  quizTabLabel: 'Код-челлендж (5 задач)',
+  showProject: true,
+  projectTabLabel: 'ТЗ на GitHub (Game Feel)',
+  projectBadge: 'Практическое ТЗ · Бонус-оценка «5»',
+  projectTitle: 'Миссия «Game Feel & Juice Pack» для любой вашей игры',
+  projectSubtitle:
+    'Возьмите любой свой проект из курса (Лабиринт, Кликер, Тетрис или Рыбалку) и добавьте 4 элемента «сочности» игры:',
+  projectRequirements: [
+    '1. Плавный отклик UI через create_tween() (пружинка при нажатии кнопок или появлении окна).',
+    '2. Эффект тряски камеры (Camera Shake) или вспышки при важном событии / столкновении.',
+    '3. Частицы (GPUParticles2D или CPUParticles2D) + минимум 2 звуковых эффекта через AudioStreamPlayer.',
+    '4. Сохранение лучшего результата в user:// через ConfigFile или JSON, чтобы рекорд не сбрасывался после перезапуска.',
+  ],
+  showResultsToStudents: true,
+};
+
+export interface WheelSpinRecord {
+  id: string;
+  uid: string;
+  userName: string;
+  labName: string;
+  tierId: string;
+  tierLabel: string;
+  won: boolean;
+  outcomeText: string;
+  dateKey: string;
+  timestampMs: number;
+}
+
+export const DAILY_SPIN_LIMIT = 3;
+
 export interface FeedbackEntry {
   id: string;
   studentName: string;
@@ -99,6 +151,8 @@ const LOCAL_FEEDBACK_KEY = 'mobile_godot_local_feedback_v1';
 const LOCAL_MISSIONS_KEY = 'mobile_godot_custom_missions_v1';
 const LOCAL_DOCS_KEY = 'mobile_godot_custom_docs_v1';
 const LOCAL_BONUS_KEY = 'mobile_godot_bonus_submissions_v1';
+const LOCAL_BONUS_CONFIG_KEY = 'mobile_godot_bonus_config_v1';
+const LOCAL_WHEEL_SPINS_KEY = 'mobile_godot_wheel_spins_v1';
 const COURSE_CHANNEL_NAME = 'mobile_godot_course_sync_v1';
 
 let courseChannel: BroadcastChannel | null = null;
@@ -440,6 +494,185 @@ export function subscribeBonusSubmissions(
   const handleStorage = (ev: StorageEvent) => {
     if (ev.key === LOCAL_BONUS_KEY) {
       onUpdate(readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY));
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export async function deleteBonusSubmission(id: string): Promise<void> {
+  const local = readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY).filter((x) => x.id !== id);
+  writeLocalArray(LOCAL_BONUS_KEY, local);
+  getCourseChannel()?.postMessage({ kind: 'bonus_update', items: local });
+  try {
+    await deleteDoc(doc(db, 'godot_bonus_submissions', id));
+  } catch {
+    // ignore
+  }
+}
+
+export function readLocalBonusConfig(): BonusConfig {
+  try {
+    const raw = localStorage.getItem(LOCAL_BONUS_CONFIG_KEY);
+    if (!raw) return DEFAULT_BONUS_CONFIG;
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_BONUS_CONFIG,
+      ...parsed,
+      projectRequirements: Array.isArray(parsed?.projectRequirements)
+        ? parsed.projectRequirements
+        : DEFAULT_BONUS_CONFIG.projectRequirements,
+    };
+  } catch {
+    return DEFAULT_BONUS_CONFIG;
+  }
+}
+
+function writeLocalBonusConfig(cfg: BonusConfig) {
+  try {
+    localStorage.setItem(LOCAL_BONUS_CONFIG_KEY, JSON.stringify(cfg));
+    getCourseChannel()?.postMessage({ kind: 'bonus_config_update', config: cfg });
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveBonusConfig(cfg: BonusConfig): Promise<void> {
+  writeLocalBonusConfig(cfg);
+  await setDoc(doc(db, 'godot_test_config', 'bonus_config'), {
+    configJson: JSON.stringify(cfg),
+    updatedAtMs: Date.now(),
+  });
+}
+
+export function subscribeBonusConfig(
+  onUpdate: (cfg: BonusConfig) => void
+): () => void {
+  onUpdate(readLocalBonusConfig());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'bonus_config'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data?.configJson === 'string') {
+          try {
+            const parsed = JSON.parse(data.configJson);
+            const merged: BonusConfig = {
+              ...DEFAULT_BONUS_CONFIG,
+              ...parsed,
+              projectRequirements: Array.isArray(parsed?.projectRequirements)
+                ? parsed.projectRequirements
+                : DEFAULT_BONUS_CONFIG.projectRequirements,
+            };
+            writeLocalBonusConfig(merged);
+            onUpdate(merged);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    },
+    () => {
+      // keep local
+    }
+  );
+
+  const ch = getCourseChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'bonus_config_update' && ev.data.config) {
+      onUpdate(ev.data.config);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_BONUS_CONFIG_KEY) {
+      onUpdate(readLocalBonusConfig());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export function getTodayDateKey(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export async function recordWheelSpin(
+  entry: Omit<WheelSpinRecord, 'id' | 'dateKey' | 'timestampMs'>
+): Promise<WheelSpinRecord> {
+  const record: WheelSpinRecord = {
+    ...entry,
+    id: `spin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    dateKey: getTodayDateKey(),
+    timestampMs: Date.now(),
+  };
+
+  const local = readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY);
+  const nextLocal = [record, ...local].slice(0, 300);
+  writeLocalArray(LOCAL_WHEEL_SPINS_KEY, nextLocal);
+  getCourseChannel()?.postMessage({ kind: 'wheel_spins_update', items: nextLocal });
+
+  try {
+    await setDoc(doc(db, 'godot_wheel_spins', record.id), record);
+  } catch (err) {
+    console.warn('Firestore wheel spin save failed, saved locally:', err);
+  }
+
+  return record;
+}
+
+export function subscribeWheelSpins(
+  onUpdate: (items: WheelSpinRecord[]) => void
+): () => void {
+  onUpdate(readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY));
+
+  const q = query(
+    collection(db, 'godot_wheel_spins'),
+    orderBy('timestampMs', 'desc'),
+    limit(200)
+  );
+  const unsubFirestore = onSnapshot(
+    q,
+    (snap) => {
+      const remote = snap.docs.map((d) => d.data() as WheelSpinRecord);
+      const map = new Map<string, WheelSpinRecord>();
+      for (const l of readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY)) map.set(l.id, l);
+      for (const r of remote) map.set(r.id, r);
+      const merged = Array.from(map.values()).sort((a, b) => b.timestampMs - a.timestampMs);
+      onUpdate(merged);
+    },
+    () => {
+      onUpdate(readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY));
+    }
+  );
+
+  const ch = getCourseChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'wheel_spins_update' && Array.isArray(ev.data.items)) {
+      onUpdate(ev.data.items);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_WHEEL_SPINS_KEY) {
+      onUpdate(readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY));
     }
   };
   window.addEventListener('storage', handleStorage);

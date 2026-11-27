@@ -205,7 +205,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
                 : 'border-transparent hover:text-[#E5A454]'
             }`}
           >
-            Апгрейдер
+            Колесо удачи
           </button>
           {isSignedIn && (
             <>
@@ -360,7 +360,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
             activeSection === 'casino' ? 'text-[#E5A454] font-semibold' : ''
           }`}
         >
-          Апгрейдер
+          Колесо удачи
         </button>
         {isSignedIn && (
           <>

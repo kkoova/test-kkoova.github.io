@@ -32,12 +32,14 @@ import { GroupRoster } from '../data/defaultRoster';
 import { Question, QUESTIONS as DEFAULT_QUESTIONS } from '../data/questions';
 import {
   BonusSubmission,
+  deleteBonusSubmission,
   FeedbackEntry,
   GlobalTimerState,
   LessonData,
   Mission,
   stopGlobalTimer,
   triggerGlobalTimer,
+  WheelSpinRecord,
 } from '../services/courseService';
 import {
   computeStudentSemesterSummary,
@@ -75,6 +77,7 @@ interface AdminDashboardProps {
   gradebook: GradebookConfig;
   allFeedback: FeedbackEntry[];
   bonusSubmissions: BonusSubmission[];
+  wheelSpins: WheelSpinRecord[];
   missions: Mission[];
   customDocs: Record<string, LessonData>;
   globalTimer: GlobalTimerState | null;
@@ -97,6 +100,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   gradebook,
   allFeedback,
   bonusSubmissions,
+  wheelSpins,
   missions,
   customDocs,
   globalTimer,
@@ -2013,9 +2017,70 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                           </a>
                         )}
                       </div>
-                      <span className="px-2.5 py-1 rounded border border-[#5D8247] bg-[#213124] font-mono text-[11px] text-[#CBEF9C] shrink-0">
-                        {b.gradeLabel}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="px-2.5 py-1 rounded border border-[#5D8247] bg-[#213124] font-mono text-[11px] text-[#CBEF9C]">
+                          {b.gradeLabel}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void deleteBonusSubmission(b.id)}
+                          title="Удалить запись"
+                          className="p-1.5 rounded border border-[#344656] bg-[#11171D] text-[#8EA0B0] hover:text-[#E06C75] cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Wheel of Fortune Spins Log */}
+            <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden">
+              <div className="px-5 py-4 border-b border-[#24303C] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-[#E5A454]" />
+                  <h2 className="text-sm font-bold text-white">
+                    Журнал «Колеса удачи» ({wheelSpins.length})
+                  </h2>
+                </div>
+              </div>
+              <div className="divide-y divide-[#1F2A35] max-h-[300px] overflow-y-auto">
+                {wheelSpins.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-[#7C8D9C]">
+                    Студенты пока не крутили колесо удачи.
+                  </div>
+                ) : (
+                  wheelSpins.map((w) => (
+                    <div
+                      key={w.id}
+                      className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="font-semibold text-white">
+                          {w.userName} ·{' '}
+                          <span className="text-[#9ED164]">{w.labName}</span> ·{' '}
+                          <span className="text-[#E5A454]">{w.tierLabel}</span>
+                        </div>
+                        <div className={w.won ? 'text-[#9ED164]' : 'text-[#FFB8BE]'}>
+                          {w.outcomeText}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`px-2 py-0.5 rounded border font-mono text-[11px] ${
+                            w.won
+                              ? 'border-[#5D8247] bg-[#213124] text-[#CBEF9C]'
+                              : 'border-[#7D3A42] bg-[#2D181B] text-[#FFB8BE]'
+                          }`}
+                        >
+                          {w.won ? 'Победа' : 'Проигрыш'}
+                        </span>
+                        <span className="font-mono text-[11px] text-[#7C8D9C]">
+                          {w.dateKey}
+                        </span>
+                      </div>
                     </div>
                   ))
                 )}
