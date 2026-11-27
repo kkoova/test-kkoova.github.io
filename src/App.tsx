@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
-import { AlertTriangle, ChevronRight, Clock, Lock, LogIn, Shield } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Clock, Lock, LogIn, Shield, ShieldCheck } from 'lucide-react';
 import { ADMIN_UID, auth, githubProvider } from './firebase';
 import { GroupRoster } from './data/defaultRoster';
 import {
@@ -50,6 +50,19 @@ import {
   subscribeWheelSpins,
   WheelSpinRecord,
 } from './services/courseService';
+import {
+  readLocalStudentSession,
+  saveLocalStudentSession,
+  StudentAccount,
+  StudentSessionUser,
+  subscribeStudentAccounts,
+} from './services/studentAuthService';
+import {
+  detectAutomationEnvironment,
+  isDevToolsHeuristicTriggered,
+  isTrustedUserEvent,
+  shuffleWithSeed,
+} from './utils/antiAgentGuard';
 import { PortalHeader } from './components/PortalHeader';
 import { CoursePortalView } from './components/CoursePortalView';
 import { LessonView } from './components/LessonView';
@@ -65,6 +78,8 @@ import { ProjectGuideBanner, ProjectGuideView } from './components/ProjectGuideV
 import { BonusTaskView } from './components/BonusTaskView';
 import { AdhdZoneView } from './components/AdhdZoneView';
 import { GradeCasinoView } from './components/GradeCasinoView';
+import { StudentLoginPanel } from './components/StudentLoginPanel';
+import { CanvasProtectedText } from './components/CanvasProtectedText';
 
 type AppView =
   | 'course'
@@ -107,10 +122,14 @@ export default function App() {
   });
   const [activeDoc, setActiveDoc] = useState<string>(initialUrlParams.doc || '01.json');
 
-  // Auth state (shared across Course, Lesson, Test, Admin, Monitor)
+  // Auth state (Student login by Group+FIO+Password; GitHub is reserved for Teacher Admin)
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authInitialized, setAuthInitialized] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
+  const [studentAccounts, setStudentAccounts] = useState<Record<string, StudentAccount>>({});
+  const [studentSession, setStudentSession] = useState<StudentSessionUser | null>(() =>
+    readLocalStudentSession()
+  );
 
   // Teacher "Enter as Student" verification mode
   const [studentViewMode, setStudentViewMode] = useState<boolean>(false);
@@ -118,12 +137,23 @@ export default function App() {
 
   const isRealAdmin = firebaseUser?.uid === ADMIN_UID;
   const isAdmin = isRealAdmin && !studentViewMode;
-  const rawSignedIn = Boolean(firebaseUser);
+  const lockedStudent =
+    !isAdmin && !(studentViewMode && simulateGuest) && studentSession
+      ? { group: studentSession.group, studentName: studentSession.studentName }
+      : null;
+
+  const rawSignedIn =
+    Boolean(studentSession) ||
+    Boolean(isRealAdmin) ||
+    Boolean(firebaseUser);
   const isSignedIn = studentViewMode && simulateGuest ? false : rawSignedIn;
 
-  const userLabel =
-    studentViewMode
-      ? 'Студент (проверка преподавателя)'
+  const userLabel = studentViewMode
+    ? studentSession
+      ? `${studentSession.studentName} (${studentSession.group})`
+      : 'Студент (проверка преподавателя)'
+    : studentSession
+      ? `${studentSession.studentName} (${studentSession.group})`
       : firebaseUser?.displayName || firebaseUser?.email || 'Гость';
 
   // Course data state
@@ -169,6 +199,10 @@ export default function App() {
     reason: string;
     count: number;
   }>({ open: false, reason: '', count: 0 });
+  const [testSessionSeed, setTestSessionSeed] = useState<string>('default');
+  const [automationBlockError, setAutomationBlockError] = useState<string | null>(null);
+  const [humanChallengeOpen, setHumanChallengeOpen] = useState<boolean>(false);
+  const [humanHoldProgress, setHumanHoldProgress] = useState<number>(0);
 
   const activeSessionRef = useRef<StudentSession | null>(null);
   const activeQuestionsRef = useRef<Question[]>(questions);
@@ -177,6 +211,10 @@ export default function App() {
   const lastViolationMsRef = useRef<number>(0);
   const enteredFullscreenRef = useRef<boolean>(false);
   const hasFinishedRef = useRef<boolean>(false);
+  const questionShownAtMsRef = useRef<number>(Date.now());
+  const pointerMovesRef = useRef<number>(0);
+  const fastStreakRef = useRef<number>(0);
+  const holdIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -220,15 +258,17 @@ export default function App() {
     return subscribeGlobalTimer(setGlobalTimer);
   }, []);
 
-  // 4. Subscribe to Student Roster, Test Configurations, Questions, Project Guide & Gradebook
+  // 4. Subscribe to Student Roster, Student Accounts, Test Configurations, Questions, Project Guide & Gradebook
   useEffect(() => {
     const unsubRoster = subscribeRoster(setRoster);
+    const unsubStudentAccounts = subscribeStudentAccounts(setStudentAccounts);
     const unsubTests = subscribeTestConfigs(setTests);
     const unsubQuestions = subscribeQuestions(setQuestions);
     const unsubProjectGuide = subscribeProjectGuide(setProjectGuide);
     const unsubGradebook = subscribeGradebook(setGradebook);
     return () => {
       unsubRoster();
+      unsubStudentAccounts();
       unsubTests();
       unsubQuestions();
       unsubProjectGuide();
@@ -282,6 +322,8 @@ export default function App() {
   const handleSignOut = async () => {
     setStudentViewMode(false);
     setSimulateGuest(false);
+    setStudentSession(null);
+    saveLocalStudentSession(null);
     if (firebaseUser) {
       await signOut(auth).catch(() => {});
     }
@@ -404,22 +446,74 @@ export default function App() {
     };
 
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    const handleClipboardBlock = (e: ClipboardEvent) => {
+      e.preventDefault();
+      triggerViolation('copy_attempt', 'Попытка копирования или вставки текста во время теста');
+    };
+    const handleKeyDownBlock = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const ctrlOrMeta = e.ctrlKey || e.metaKey;
+      const isDevToolsKey =
+        e.key === 'F12' ||
+        (ctrlOrMeta && e.shiftKey && ['i', 'j', 'c', 'k'].includes(key)) ||
+        (ctrlOrMeta && ['u', 'c', 's', 'a', 'p'].includes(key)) ||
+        e.key === 'PrintScreen';
+
+      if (isDevToolsKey) {
+        e.preventDefault();
+        triggerViolation(
+          'devtools_shortcut',
+          `Запрещённая клавиша или комбинация (${e.key})`
+        );
+      }
+    };
+    const handlePointerMove = (e: PointerEvent) => {
+      if (e.isTrusted) {
+        pointerMovesRef.current += 1;
+      }
+    };
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
 
+    const guardInterval = window.setInterval(() => {
+      const autoCheck = detectAutomationEnvironment();
+      if (autoCheck.suspicious) {
+        triggerViolation(
+          'automation_detected',
+          `Обнаружена среда автоматизации (${autoCheck.reasons.join(', ')})`
+        );
+      } else if (isDevToolsHeuristicTriggered()) {
+        triggerViolation(
+          'devtools_opened',
+          'Подозрение на открытую панель разработчика (DevTools)'
+        );
+      }
+    }, 2200);
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleBlur);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('copy', handleClipboardBlock);
+    document.addEventListener('cut', handleClipboardBlock);
+    document.addEventListener('paste', handleClipboardBlock);
+    window.addEventListener('keydown', handleKeyDownBlock, true);
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      window.clearInterval(guardInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('copy', handleClipboardBlock);
+      document.removeEventListener('cut', handleClipboardBlock);
+      document.removeEventListener('paste', handleClipboardBlock);
+      window.removeEventListener('keydown', handleKeyDownBlock, true);
+      window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [view, triggerViolation]);
@@ -433,6 +527,15 @@ export default function App() {
     group: string;
     studentName: string;
   }) => {
+    setAutomationBlockError(null);
+    const autoCheck = detectAutomationEnvironment();
+    if (autoCheck.suspicious && !isRealAdmin) {
+      setAutomationBlockError(
+        `Запуск заблокирован: обнаружен браузер автоматизации / AI-агент (${autoCheck.reasons.join(', ')}). Используйте обычный браузер без скриптов управления.`
+      );
+      return;
+    }
+
     enteredFullscreenRef.current = false;
     try {
       if (document.documentElement.requestFullscreen) {
@@ -447,11 +550,19 @@ export default function App() {
       test.questionIds.length > 0
         ? questions.filter((q) => test.questionIds.includes(q.id))
         : questions;
-    const finalQuestions = qList.length > 0 ? qList : questions;
+    const rawQuestions = qList.length > 0 ? qList : questions;
+    const seed = `${studentName}_${group}_${Date.now()}`;
+    const finalQuestions = shuffleWithSeed(rawQuestions, seed);
     const durationMin = Math.max(1, test.durationMinutes || 25);
     const deadlineMs = Date.now() + durationMin * 60 * 1000;
 
     hasFinishedRef.current = false;
+    questionShownAtMsRef.current = Date.now();
+    pointerMovesRef.current = 0;
+    fastStreakRef.current = 0;
+    setHumanChallengeOpen(false);
+    setHumanHoldProgress(0);
+    setTestSessionSeed(seed);
     setActiveTest(test);
     setActiveQuestions(finalQuestions);
     activeQuestionsRef.current = finalQuestions;
@@ -462,7 +573,7 @@ export default function App() {
       studentName,
       group,
       totalQuestions: finalQuestions.length,
-      githubUid: studentViewMode ? null : firebaseUser?.uid || null,
+      githubUid: studentSession?.id || (studentViewMode ? null : firebaseUser?.uid || null),
       testId: test.id,
       testTitle: test.title,
       durationMinutes: durationMin,
@@ -509,14 +620,13 @@ export default function App() {
     });
   };
 
-  const handleNextOrFinish = async () => {
-    const q = activeQuestions[currentIdx];
-    if (!q || !isQuestionAnswered(q, answers[q.id])) return;
-
+  const proceedToNextOrFinish = async () => {
     const answeredCount = Object.keys(answers).length;
     if (currentIdx < activeQuestions.length - 1) {
       const nextIdx = currentIdx + 1;
       setCurrentIdx(nextIdx);
+      questionShownAtMsRef.current = Date.now();
+      pointerMovesRef.current = 0;
       if (activeSessionRef.current) {
         const updated = await updateSessionProgress(activeSessionRef.current, {
           currentQuestion: nextIdx + 1,
@@ -531,11 +641,78 @@ export default function App() {
     }
   };
 
+  const handleNextOrFinish = async (e?: React.MouseEvent<HTMLButtonElement>) => {
+    if (e && !isTrustedUserEvent(e)) {
+      triggerViolation(
+        'automation_detected',
+        'Программный клик по кнопке перехода (искусственное событие)'
+      );
+      return;
+    }
+
+    const q = activeQuestions[currentIdx];
+    if (!q || !isQuestionAnswered(q, answers[q.id])) return;
+
+    const elapsedMs = Date.now() - questionShownAtMsRef.current;
+    if (elapsedMs < 850 || (elapsedMs < 1800 && pointerMovesRef.current === 0)) {
+      fastStreakRef.current += 1;
+      if (fastStreakRef.current >= 2) {
+        setHumanHoldProgress(0);
+        setHumanChallengeOpen(true);
+        triggerViolation(
+          'automation_detected',
+          'Подозрительно быстрое прохождение без движения курсора (признак бота)'
+        );
+        return;
+      }
+    } else {
+      fastStreakRef.current = 0;
+    }
+
+    await proceedToNextOrFinish();
+  };
+
+  const startHumanHold = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isTrustedUserEvent(e)) {
+      triggerViolation('automation_detected', 'Искусственное удержание кнопки проверки');
+      return;
+    }
+    if (holdIntervalRef.current) window.clearInterval(holdIntervalRef.current);
+    const startMs = Date.now();
+    holdIntervalRef.current = window.setInterval(() => {
+      const pct = Math.min(100, Math.round(((Date.now() - startMs) / 1200) * 100));
+      setHumanHoldProgress(pct);
+      if (pct >= 100) {
+        if (holdIntervalRef.current) window.clearInterval(holdIntervalRef.current);
+        holdIntervalRef.current = null;
+        fastStreakRef.current = 0;
+        setHumanChallengeOpen(false);
+        setHumanHoldProgress(0);
+        proceedToNextOrFinish();
+      }
+    }, 40);
+  };
+
+  const stopHumanHold = () => {
+    if (holdIntervalRef.current) {
+      window.clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+    setHumanHoldProgress(0);
+  };
+
   const groupNames = useMemo(() => roster.map((g) => g.name), [roster]);
   const userTestSessions = useMemo(() => {
+    if (lockedStudent) {
+      return sessions.filter(
+        (s) =>
+          (s.studentName === lockedStudent.studentName && s.group === lockedStudent.group) ||
+          (studentSession?.id ? s.githubUid === studentSession.id : false)
+      );
+    }
     if (!firebaseUser?.uid) return sessions;
     return sessions.filter((s) => s.githubUid === firebaseUser.uid);
-  }, [sessions, firebaseUser?.uid]);
+  }, [sessions, lockedStudent, studentSession?.id, firebaseUser?.uid]);
 
   // 1. Second Screen Monitor View (?view=monitor or in-place)
   if (view === 'monitor') {
@@ -596,6 +773,7 @@ export default function App() {
           allFeedback={allFeedback}
           bonusSubmissions={bonusSubmissions}
           wheelSpins={wheelSpins}
+          studentAccounts={studentAccounts}
           missions={missions}
           customDocs={customDocs}
           globalTimer={globalTimer}
@@ -646,6 +824,38 @@ export default function App() {
                 className="w-full py-3 rounded-lg bg-[#E06C75] text-[#1A0D0F] font-semibold text-sm hover:bg-[#EA858D] transition-colors cursor-pointer"
               >
                 Вернуться к тесту
+              </button>
+            </div>
+          </div>
+        )}
+
+        {humanChallengeOpen && (
+          <div className="fixed inset-0 z-50 bg-[#0B0F14]/95 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="max-w-md w-full rounded-xl border border-[#E5A454]/60 bg-[#1C1812] p-7 text-center space-y-4 shadow-2xl">
+              <div className="w-12 h-12 mx-auto rounded-full bg-[#2A2215] flex items-center justify-center text-[#E5A454]">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <h2 className="text-lg font-bold text-[#F3D3A7]">
+                Проверка на живого пользователя
+              </h2>
+              <p className="text-xs text-[#C7B8A1] leading-relaxed">
+                Ответы отправляются слишком быстро без естественного движения мыши. Удерживайте кнопку ниже 1.2 секунды, чтобы подтвердить, что тест проходите вы лично, а не скрипт.
+              </p>
+              <div className="h-2 rounded-full bg-[#262018] overflow-hidden">
+                <div
+                  className="h-full bg-[#9ED164] transition-all duration-75"
+                  style={{ width: `${humanHoldProgress}%` }}
+                />
+              </div>
+              <button
+                type="button"
+                onPointerDown={startHumanHold}
+                onPointerUp={stopHumanHold}
+                onPointerLeave={stopHumanHold}
+                onPointerCancel={stopHumanHold}
+                className="w-full py-3.5 rounded-lg bg-[#E5A454] text-[#1A1308] font-bold text-sm hover:bg-[#F0B86F] transition-colors cursor-pointer select-none"
+              >
+                Удерживайте кнопку (прогресс: {humanHoldProgress}%)
               </button>
             </div>
           </div>
@@ -721,16 +931,30 @@ export default function App() {
             </div>
 
             <div className="p-6 space-y-5">
-              <div>
-                <h2 className="text-xl sm:text-2xl font-bold text-[#F1F6FA] leading-snug mb-2">
-                  {currentQuestion.title}
-                </h2>
-                <p className="text-sm text-[#A9B9C8] leading-relaxed">{currentQuestion.desc}</p>
+              <div className="space-y-2.5">
+                <CanvasProtectedText
+                  text={currentQuestion.title}
+                  fontSize={20}
+                  lineHeight={28}
+                  fontWeight="700"
+                  color="#F1F6FA"
+                />
+                <CanvasProtectedText
+                  text={currentQuestion.desc}
+                  fontSize={14}
+                  lineHeight={21}
+                  color="#A9B9C8"
+                />
               </div>
 
               {currentQuestion.context && (
-                <div className="p-3.5 rounded-lg border border-[#2A3744] bg-[#11171D] text-xs text-[#C7D3DF] leading-relaxed">
-                  {currentQuestion.context}
+                <div className="p-3.5 rounded-lg border border-[#2A3744] bg-[#11171D]">
+                  <CanvasProtectedText
+                    text={currentQuestion.context}
+                    fontSize={12}
+                    lineHeight={19}
+                    color="#C7D3DF"
+                  />
                 </div>
               )}
 
@@ -738,6 +962,9 @@ export default function App() {
                 question={currentQuestion}
                 value={currentValue}
                 onChange={handleAnswerChange}
+                protectedMode
+                sessionSeed={testSessionSeed}
+                onAutomationDetected={(reason) => triggerViolation('automation_detected', reason)}
               />
             </div>
 
@@ -805,7 +1032,7 @@ export default function App() {
         onOpenAdmin={() => setView('admin')}
         onToggleStudentPreview={toggleStudentPreview}
         onToggleSimulateGuest={() => setSimulateGuest((v) => !v)}
-        onSignIn={handleGitHubSignIn}
+        onSignIn={() => setView('course')}
         onSignOut={handleSignOut}
       />
 
@@ -815,6 +1042,7 @@ export default function App() {
           <BonusTaskView
             roster={roster}
             defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
+            lockedStudent={lockedStudent}
             isAdmin={isAdmin}
             bonusConfig={bonusConfig}
             bonusSubmissions={bonusSubmissions}
@@ -824,12 +1052,14 @@ export default function App() {
         ) : view === 'casino' ? (
           <GradeCasinoView
             isSignedIn={isSignedIn}
-            userUid={studentViewMode ? 'teacher_student_preview' : firebaseUser?.uid || null}
+            userUid={
+              studentSession?.id ||
+              (studentViewMode ? 'teacher_student_preview' : firebaseUser?.uid || null)
+            }
             userName={userLabel}
             labsCount={gradebook.labsCount || 6}
             wheelSpins={wheelSpins}
-            authLoading={authLoading}
-            onSignIn={handleGitHubSignIn}
+            onSignIn={() => setView('course')}
             onOpenBonus={() => setView('bonus')}
             onOpenTests={() => setView('test_start')}
           />
@@ -840,48 +1070,40 @@ export default function App() {
             roster={roster}
             isAdmin={isAdmin}
             defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
+            lockedStudent={lockedStudent}
             onBack={() => setView('course')}
           />
         ) : view === 'course' && !isSignedIn && authInitialized ? (
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-12 space-y-8">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left 5 cols: GitHub Login Card */}
-              <div className="lg:col-span-5 rounded-xl border border-[#2A3744] bg-[#161E27] p-7 sm:p-8 space-y-5 shadow-xl">
-                <div className="w-12 h-12 rounded-lg bg-[#213124] border border-[#5D8247] flex items-center justify-center font-mono text-xl font-bold text-[#CBEF9C]">
-                  G
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs font-mono text-[#9ED164]">Портал курса</div>
-                  <h1 className="text-2xl font-bold text-white">Mobile Godot</h1>
-                  <p className="text-xs text-[#9FB0C0] leading-relaxed">
-                    Войдите через GitHub, чтобы открыть карту миссий и методические материалы курса. Преподаватель определяется автоматически.
-                  </p>
-                </div>
-
-                {!studentViewMode ? (
-                  <button
-                    type="button"
-                    disabled={authLoading}
-                    onClick={handleGitHubSignIn}
-                    className="w-full py-3.5 px-4 rounded-lg bg-[#9ED164] text-[#111912] text-sm font-semibold hover:bg-[#B4E07F] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                  >
-                    <LogIn className="w-4 h-4" />
-                    <span>{authLoading ? 'Выполняется вход...' : 'Войти через GitHub'}</span>
-                  </button>
-                ) : (
-                  <div className="p-3 rounded-lg border border-[#344656] bg-[#11171D] text-xs text-[#9FB0C0]">
-                    Вы просматриваете стартовую страницу так, как её видит студент до входа через GitHub.
+              {/* Left 5 cols: Student Group + FIO + Password Login (and secondary Teacher Login) */}
+              <div className="lg:col-span-5 space-y-3">
+                {studentViewMode ? (
+                  <div className="rounded-xl border border-[#2A3744] bg-[#161E27] p-7 space-y-4">
+                    <div className="text-xs font-mono text-[#9ED164]">Предпросмотр гостя</div>
+                    <h1 className="text-xl font-bold text-white">Экран входа студента</h1>
+                    <p className="text-xs text-[#9FB0C0] leading-relaxed">
+                      Студент выбирает группу и своё ФИО из списка и задаёт пароль при первом входе. Вы сейчас смотрите портал в режиме гостя.
+                    </p>
                   </div>
+                ) : (
+                  <StudentLoginPanel
+                    roster={roster}
+                    accounts={studentAccounts}
+                    authLoading={authLoading}
+                    onStudentLoginSuccess={(sess) => setStudentSession(sess)}
+                    onTeacherSignIn={handleGitHubSignIn}
+                  />
                 )}
               </div>
 
-              {/* Right 7 cols: Tests Catalog & Scheduled Dates (Locked until Teacher Unlocks) */}
+              {/* Right 7 cols: Tests Catalog & Scheduled Dates */}
               <div className="lg:col-span-7 space-y-4">
                 <div className="space-y-1">
                   <div className="text-xs font-mono text-[#E5A454]">Контроль знаний и расписание</div>
                   <h2 className="text-xl font-bold text-white">Тестирования по курсу</h2>
                   <p className="text-xs text-[#9FB0C0] leading-relaxed">
-                    Здесь отображаются назначенные тесты и даты проведения для групп. Доступ открывается только после нажатия кнопки разблокировки преподавателем.
+                    Здесь отображаются назначенные тесты и даты проведения для групп. Для прохождения войдите в свой аккаунт студента слева.
                   </p>
                 </div>
 
@@ -900,6 +1122,7 @@ export default function App() {
               guide={projectGuide}
               gradebook={gradebook}
               roster={roster}
+              lockedStudent={lockedStudent}
               onOpenGuide={() => setView('project')}
             />
           </div>
@@ -915,6 +1138,7 @@ export default function App() {
               projectGuide={projectGuide}
               gradebook={gradebook}
               roster={roster}
+              lockedStudent={lockedStudent}
               onOpenLesson={(docUrl) => {
                 setActiveDoc(docUrl);
                 setView('lesson');
@@ -945,14 +1169,27 @@ export default function App() {
             }}
           />
         ) : (
-          <StartScreen
-            tests={tests}
-            roster={roster}
-            totalQuestions={questions.length}
-            initialTestId={preselectedTestId}
-            defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
-            onStartTest={handleStartTest}
-          />
+          <div className="space-y-4">
+            {automationBlockError && (
+              <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6">
+                <div className="p-4 rounded-xl border border-[#E06C75]/60 bg-[#2D181B] text-xs text-[#FFB8BE] flex items-center gap-3">
+                  <AlertTriangle className="w-5 h-5 text-[#E06C75] shrink-0" />
+                  <span>{automationBlockError}</span>
+                </div>
+              </div>
+            )}
+            <StartScreen
+              tests={tests}
+              roster={roster}
+              totalQuestions={questions.length}
+              initialTestId={preselectedTestId}
+              defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
+              lockedStudent={lockedStudent}
+              allowManualPick={isRealAdmin && (studentViewMode || !lockedStudent)}
+              onRequireLogin={() => setView('course')}
+              onStartTest={handleStartTest}
+            />
+          </div>
         )}
       </main>
 
@@ -961,12 +1198,13 @@ export default function App() {
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
         displayName={userLabel}
-        email={firebaseUser?.email || ''}
-        photoUrl={firebaseUser?.photoURL || null}
+        email={studentSession ? `Группа ${studentSession.group}` : firebaseUser?.email || ''}
+        photoUrl={studentSession ? null : firebaseUser?.photoURL || null}
         missions={missions}
         gradebook={gradebook}
         roster={roster}
         testSessions={userTestSessions}
+        lockedStudent={lockedStudent}
         onOpenProjectGuide={() => setView('project')}
       />
 

@@ -299,7 +299,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[#9ED164] text-[#111912] text-xs font-semibold hover:bg-[#B4E07F] transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>{authLoading ? 'Вход...' : 'Войти через GitHub'}</span>
+                <span>{authLoading ? 'Вход...' : 'Войти в аккаунт'}</span>
               </button>
             )
           )}

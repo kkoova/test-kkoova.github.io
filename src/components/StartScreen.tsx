@@ -169,6 +169,9 @@ interface StartScreenProps {
   totalQuestions: number;
   initialTestId?: string | null;
   defaultStudentHint?: string | null;
+  lockedStudent?: { group: string; studentName: string } | null;
+  allowManualPick?: boolean;
+  onRequireLogin?: () => void;
   onStartTest: (params: { test: TestDefinition; group: string; studentName: string }) => void;
 }
 
@@ -178,6 +181,9 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   totalQuestions,
   initialTestId,
   defaultStudentHint,
+  lockedStudent = null,
+  allowManualPick = false,
+  onRequireLogin,
   onStartTest,
 }) => {
   const [selectedTestId, setSelectedTestId] = useState<string>(() => {
@@ -189,9 +195,21 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     return firstOpen?.id || tests[0]?.id || '';
   });
 
-  const [selectedGroup, setSelectedGroup] = useState<string>('');
-  const [selectedStudent, setSelectedStudent] = useState<string>('');
+  const [selectedGroup, setSelectedGroup] = useState<string>(
+    () => lockedStudent?.group || ''
+  );
+  const [selectedStudent, setSelectedStudent] = useState<string>(
+    () => lockedStudent?.studentName || ''
+  );
   const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (lockedStudent) {
+      setSelectedGroup(lockedStudent.group);
+      setSelectedStudent(lockedStudent.studentName);
+      setFormError(null);
+    }
+  }, [lockedStudent]);
 
   useEffect(() => {
     if (initialTestId) {
@@ -365,37 +383,106 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                     Перейти к выполнению заданий можно только после того, как преподаватель нажмёт кнопку разблокировки.
                   </p>
                 </div>
+              ) : !lockedStudent && !allowManualPick ? (
+                <div className="p-5 rounded-lg border border-[#344656] bg-[#11171D] text-center space-y-3">
+                  <div className="w-10 h-10 mx-auto rounded-lg bg-[#213124] border border-[#5D8247] flex items-center justify-center text-[#9ED164]">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm font-semibold text-white">
+                    Войдите в свой аккаунт студента
+                  </div>
+                  <p className="text-xs text-[#9FB0C0] leading-relaxed">
+                    Чтобы пройти тест под своим ФИО и группой, сначала авторизуйтесь на главной странице.
+                  </p>
+                  {onRequireLogin && (
+                    <button
+                      type="button"
+                      onClick={onRequireLogin}
+                      className="w-full py-3 px-4 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-bold hover:bg-[#B4E07F] cursor-pointer"
+                    >
+                      Перейти ко входу
+                    </button>
+                  )}
+                </div>
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
-                  <div>
-                    <label
-                      htmlFor="group-select"
-                      className="block text-xs font-mono text-[#8EA0B0] mb-1.5"
-                    >
-                      Учебная группа
-                    </label>
-                    <select
-                      id="group-select"
-                      value={selectedGroup}
-                      onChange={(e) => handleGroupChange(e.target.value)}
-                      className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-3 text-sm text-[#F1F6FA] focus:outline-none focus:border-[#9ED164]"
-                    >
-                      <option value="">— Выберите группу —</option>
-                      {roster.map((g) => {
-                        const acc = getTestGroupAccess(selectedTest, g.name);
-                        const suffix = acc.allowed
-                          ? 'Открыт'
-                          : acc.scheduledAt
-                            ? `${formatScheduledDateRu(acc.scheduledAt)} (Закрыт)`
-                            : 'Закрыт';
-                        return (
-                          <option key={g.id} value={g.name}>
-                            {g.name} · {suffix}
+                  {lockedStudent ? (
+                    <div className="p-3.5 rounded-lg border border-[#4A683B] bg-[#18241C] space-y-1">
+                      <div className="text-[11px] font-mono text-[#9ED164]">
+                        Автоматическая привязка профиля
+                      </div>
+                      <div className="text-sm font-bold text-white">
+                        {lockedStudent.studentName}
+                      </div>
+                      <div className="text-xs text-[#CBEF9C]">
+                        Группа: {lockedStudent.group}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <label
+                          htmlFor="group-select"
+                          className="block text-xs font-mono text-[#8EA0B0] mb-1.5"
+                        >
+                          Учебная группа
+                        </label>
+                        <select
+                          id="group-select"
+                          value={selectedGroup}
+                          onChange={(e) => handleGroupChange(e.target.value)}
+                          className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-3 text-sm text-[#F1F6FA] focus:outline-none focus:border-[#9ED164]"
+                        >
+                          <option value="">— Выберите группу —</option>
+                          {roster.map((g) => {
+                            const acc = getTestGroupAccess(selectedTest, g.name);
+                            const suffix = acc.allowed
+                              ? 'Открыт'
+                              : acc.scheduledAt
+                                ? `${formatScheduledDateRu(acc.scheduledAt)} (Закрыт)`
+                                : 'Закрыт';
+                            return (
+                              <option key={g.id} value={g.name}>
+                                {g.name} · {suffix}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="student-select"
+                          className="block text-xs font-mono text-[#8EA0B0] mb-1.5"
+                        >
+                          Фамилия и имя студента
+                        </label>
+                        <select
+                          id="student-select"
+                          value={selectedStudent}
+                          disabled={!selectedGroup || (groupAccess !== null && !groupAccess.allowed)}
+                          onChange={(e) => {
+                            setSelectedStudent(e.target.value);
+                            setFormError(null);
+                          }}
+                          className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-3 text-sm text-[#F1F6FA] focus:outline-none focus:border-[#9ED164] disabled:opacity-45 disabled:cursor-not-allowed"
+                        >
+                          <option value="">
+                            {!selectedGroup
+                              ? '— Сначала выберите группу —'
+                              : groupAccess && !groupAccess.allowed
+                                ? '— Доступ для группы закрыт —'
+                                : '— Выберите ваше имя —'}
                           </option>
-                        );
-                      })}
-                    </select>
-                  </div>
+                          {studentsInGroup.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
 
                   {groupAccess && !groupAccess.allowed && (
                     <div className="p-3.5 rounded-lg border border-[#E5A454]/50 bg-[#251E15] text-xs text-[#F3D3A7] flex items-start gap-2.5 leading-relaxed">
@@ -403,38 +490,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       <span>{groupAccess.reason}</span>
                     </div>
                   )}
-
-                  <div>
-                    <label
-                      htmlFor="student-select"
-                      className="block text-xs font-mono text-[#8EA0B0] mb-1.5"
-                    >
-                      Фамилия и имя студента
-                    </label>
-                    <select
-                      id="student-select"
-                      value={selectedStudent}
-                      disabled={!selectedGroup || (groupAccess !== null && !groupAccess.allowed)}
-                      onChange={(e) => {
-                        setSelectedStudent(e.target.value);
-                        setFormError(null);
-                      }}
-                      className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-3 text-sm text-[#F1F6FA] focus:outline-none focus:border-[#9ED164] disabled:opacity-45 disabled:cursor-not-allowed"
-                    >
-                      <option value="">
-                        {!selectedGroup
-                          ? '— Сначала выберите группу —'
-                          : groupAccess && !groupAccess.allowed
-                            ? '— Доступ для группы закрыт —'
-                            : '— Выберите ваше имя —'}
-                      </option>
-                      {studentsInGroup.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
 
                   {formError && (
                     <div className="text-xs text-[#E06C75] bg-[#2D181B] border border-[#E06C75]/40 rounded-md px-3 py-2">
@@ -445,14 +500,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   <div className="p-4 rounded-lg border border-[#2A3744] bg-[#11171D] space-y-2">
                     <div className="flex items-center gap-2 text-xs font-semibold text-[#E5A454]">
                       <ShieldAlert className="w-4 h-4 shrink-0" />
-                      <span>Таймер и контроль фокуса</span>
+                      <span>Защита, таймер и контроль фокуса</span>
                     </div>
                     <p className="text-xs text-[#91A2B2] leading-relaxed">
                       Время ограничено:{' '}
                       <strong className="text-[#E6EDF3]">
                         {selectedTest.durationMinutes} мин
                       </strong>
-                      . По истечении таймера тест завершится автоматически и покажет вашу итоговую оценку. Выход из окна фиксируется в журнале.
+                      . Выход из окна, копирование и автоматизация фиксируются в журнале. Задания перемешиваются и защищены от чтения ботами.
                     </p>
                   </div>
 

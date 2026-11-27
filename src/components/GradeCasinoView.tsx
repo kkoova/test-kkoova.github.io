@@ -1,5 +1,6 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Award,
   CheckCircle2,
   Dice5,
@@ -9,9 +10,12 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  AuthoritativeServerTime,
   DAILY_SPIN_LIMIT,
-  getTodayDateKey,
+  fetchAuthoritativeServerTime,
   recordWheelSpin,
+  subscribeWheelLimit,
+  WheelLimitState,
   WheelSpinRecord,
 } from '../services/courseService';
 
@@ -70,7 +74,6 @@ interface GradeCasinoViewProps {
   userName: string;
   labsCount: number;
   wheelSpins: WheelSpinRecord[];
-  authLoading: boolean;
   onSignIn: () => void;
   onOpenBonus: () => void;
   onOpenTests: () => void;
@@ -82,7 +85,6 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
   userName,
   labsCount,
   wheelSpins,
-  authLoading,
   onSignIn,
   onOpenBonus,
   onOpenTests,
@@ -96,6 +98,10 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
   const [selectedTierId, setSelectedTierId] = useState<WheelTier['id']>('2_to_3');
   const [spinning, setSpinning] = useState(false);
   const [wheelDeg, setWheelDeg] = useState(0);
+  const [serverTime, setServerTime] = useState<AuthoritativeServerTime | null>(null);
+  const [timeCheckError, setTimeCheckError] = useState<string | null>(null);
+  const [checkingTime, setCheckingTime] = useState(false);
+  const [wheelLimit, setWheelLimit] = useState<WheelLimitState | null>(null);
   const [lastOutcome, setLastOutcome] = useState<{
     won: boolean;
     title: string;
@@ -104,28 +110,94 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
 
   const spinTimeoutRef = useRef<number | null>(null);
 
+  // Subscribe to Firestore-backed daily spin limit for this account
+  useEffect(() => {
+    if (!isSignedIn || !userUid) {
+      setWheelLimit(null);
+      return;
+    }
+    return subscribeWheelLimit(userUid, setWheelLimit);
+  }, [isSignedIn, userUid]);
+
+  // Verify authoritative server time on mount (ignores OS/device clock changes)
+  useEffect(() => {
+    if (!isSignedIn || !userUid) return;
+    let cancelled = false;
+    setCheckingTime(true);
+    setTimeCheckError(null);
+    fetchAuthoritativeServerTime(userUid)
+      .then((res) => {
+        if (!cancelled) {
+          setServerTime(res);
+          setCheckingTime(false);
+        }
+      })
+      .catch((err: Error) => {
+        if (!cancelled) {
+          setTimeCheckError(err.message);
+          setCheckingTime(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSignedIn, userUid]);
+
   const effectiveLab = labOptions.includes(selectedLab) ? selectedLab : labOptions[0];
   const tier = useMemo(
     () => WHEEL_TIERS.find((t) => t.id === selectedTierId) || WHEEL_TIERS[0],
     [selectedTierId]
   );
 
-  const todayKey = getTodayDateKey();
   const userSpins = useMemo(() => {
     if (!userUid) return [];
     return wheelSpins.filter((s) => s.uid === userUid);
   }, [wheelSpins, userUid]);
 
-  const todaySpinsCount = useMemo(
-    () => userSpins.filter((s) => s.dateKey === todayKey).length,
-    [userSpins, todayKey]
-  );
+  const todayKey = serverTime?.dateKey || null;
 
-  const remainingSpins = Math.max(0, DAILY_SPIN_LIMIT - todaySpinsCount);
+  const todaySpinsCount = useMemo(() => {
+    if (!todayKey) return DAILY_SPIN_LIMIT;
+    const fromHistory = userSpins.filter((s) => s.dateKey === todayKey).length;
+    const fromLimitDoc =
+      wheelLimit && wheelLimit.dateKey === todayKey ? wheelLimit.count : 0;
+    return Math.max(fromHistory, fromLimitDoc);
+  }, [userSpins, wheelLimit, todayKey]);
+
+  const remainingSpins = todayKey
+    ? Math.max(0, DAILY_SPIN_LIMIT - todaySpinsCount)
+    : 0;
   const greenAngle = Math.round((tier.sectorPercent / 100) * 360);
 
-  const handleSpin = () => {
+  const handleSpin = async () => {
     if (!isSignedIn || !userUid || spinning || remainingSpins <= 0) return;
+
+    setCheckingTime(true);
+    setTimeCheckError(null);
+    let freshTime: AuthoritativeServerTime;
+    try {
+      freshTime = await fetchAuthoritativeServerTime(userUid);
+      setServerTime(freshTime);
+    } catch (err) {
+      setCheckingTime(false);
+      setTimeCheckError(
+        err instanceof Error
+          ? err.message
+          : 'Не удалось подтвердить серверное время.'
+      );
+      return;
+    }
+    setCheckingTime(false);
+
+    const latestHistoryCount = userSpins.filter(
+      (s) => s.dateKey === freshTime.dateKey
+    ).length;
+    const latestDocCount =
+      wheelLimit && wheelLimit.dateKey === freshTime.dateKey ? wheelLimit.count : 0;
+    if (Math.max(latestHistoryCount, latestDocCount) >= DAILY_SPIN_LIMIT) {
+      setTimeCheckError('Попытки на сегодня по серверному времени уже исчерпаны.');
+      return;
+    }
 
     setSpinning(true);
     setLastOutcome(null);
@@ -178,6 +250,8 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
         tierLabel: tierAtSpin.shortTitle,
         won,
         outcomeText,
+        serverDateKey: freshTime.dateKey,
+        serverNowMs: freshTime.serverNowMs,
       });
     }, 2300);
   };
@@ -195,18 +269,17 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
               Войдите в аккаунт, чтобы крутить колесо
             </h1>
             <p className="text-xs text-[#9FB0C0] max-w-md mx-auto leading-relaxed">
-              Каждому авторизованному студенту доступно {DAILY_SPIN_LIMIT} попытки в день. Выбирайте лабораторную работу и желаемый результат.
+              Каждому авторизованному студенту доступно {DAILY_SPIN_LIMIT} попытки в день по серверному времени. Выбирайте лабораторную работу и желаемый результат.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
             <button
               type="button"
-              disabled={authLoading}
               onClick={onSignIn}
-              className="px-5 py-3 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-bold hover:bg-[#B4E07F] transition-colors inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              className="px-5 py-3 rounded-lg bg-[#9ED164] text-[#111912] text-xs font-bold hover:bg-[#B4E07F] transition-colors inline-flex items-center gap-2 cursor-pointer"
             >
               <LogIn className="w-4 h-4" />
-              <span>{authLoading ? 'Вход...' : 'Войти через GitHub'}</span>
+              <span>Войти (группа, ФИО и пароль)</span>
             </button>
             <button
               type="button"
@@ -233,21 +306,42 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
           <h1 className="text-2xl font-bold text-white">Колесо удачи</h1>
           <p className="text-xs text-[#9FB0C0] max-w-2xl leading-relaxed">
             Выберите лабораторную работу и один из 4 вариантов ставки. У каждого студента есть{' '}
-            <strong className="text-white">{DAILY_SPIN_LIMIT} попытки в день</strong>.
+            <strong className="text-white">{DAILY_SPIN_LIMIT} попытки в день</strong> (лимит синхронизируется с сервером).
           </p>
         </div>
 
         <div className="px-4 py-3 rounded-lg border border-[#344656] bg-[#11171D] text-right shrink-0">
-          <div className="text-[11px] font-mono text-[#8EA0B0]">Попыток на сегодня</div>
+          <div className="text-[11px] font-mono text-[#8EA0B0]">
+            Попыток сегодня {todayKey ? `(${todayKey})` : ''}
+          </div>
           <div
             className={`text-xl font-bold font-mono tabular-nums ${
-              remainingSpins > 0 ? 'text-[#9ED164]' : 'text-[#E06C75]'
+              checkingTime
+                ? 'text-[#8EA0B0]'
+                : remainingSpins > 0
+                  ? 'text-[#9ED164]'
+                  : 'text-[#E06C75]'
             }`}
           >
-            {remainingSpins} / {DAILY_SPIN_LIMIT}
+            {checkingTime ? '...' : `${remainingSpins} / ${DAILY_SPIN_LIMIT}`}
           </div>
         </div>
       </section>
+
+      {serverTime?.clockTampered && (
+        <div className="p-3.5 rounded-lg border border-[#E5A454]/50 bg-[#251E15] text-xs text-[#F3D3A7] flex items-center gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-[#E5A454] shrink-0" />
+          <span>
+            Время на вашем устройстве отличается от серверного. Лимит попыток учитывается строго по серверному времени ({serverTime.dateKey}).
+          </span>
+        </div>
+      )}
+
+      {timeCheckError && (
+        <div className="p-3.5 rounded-lg border border-[#E06C75]/50 bg-[#2D181B] text-xs text-[#FFB8BE]">
+          {timeCheckError}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left: Wheel & Selection */}
@@ -347,17 +441,19 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
 
           <button
             type="button"
-            disabled={spinning || remainingSpins <= 0}
-            onClick={handleSpin}
+            disabled={spinning || checkingTime || !todayKey || remainingSpins <= 0}
+            onClick={() => void handleSpin()}
             className="w-full py-3.5 px-5 rounded-lg bg-[#E5A454] text-[#1A140C] font-bold text-sm hover:bg-[#F0B469] transition-colors inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
           >
             <Dice5 className="w-4 h-4" />
             <span>
               {spinning
                 ? 'Колесо крутится...'
-                : remainingSpins <= 0
-                  ? 'Попытки на сегодня закончились (0 / 3)'
-                  : `Крутить колесо (${effectiveLab}: ${tier.shortTitle})`}
+                : checkingTime
+                  ? 'Проверка времени сервера...'
+                  : remainingSpins <= 0
+                    ? 'Попытки на сегодня закончились (0 / 3)'
+                    : `Крутить колесо (${effectiveLab}: ${tier.shortTitle})`}
             </span>
           </button>
 
@@ -387,7 +483,7 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
           <div className="rounded-xl border border-[#2A3744] bg-[#161E27] p-6 space-y-4">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-base font-bold text-white">Ваша история круток</h2>
-              <span className="text-xs font-mono text-[#8EA0B0] tabular-nums">
+              <span className="text-xs font-mono text-[#8EA0B0] tabular-nums truncate max-w-[180px]">
                 {userName}
               </span>
             </div>
@@ -412,10 +508,7 @@ export const GradeCasinoView: React.FC<GradeCasinoViewProps> = ({
                         {s.labName} · {s.tierLabel}
                       </span>
                       <span className="font-mono text-[11px] text-[#7C8D9C]">
-                        {new Date(s.timestampMs).toLocaleTimeString('ru-RU', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        {s.dateKey}
                       </span>
                     </div>
                     <div className={s.won ? 'text-[#9ED164]' : 'text-[#FFB8BE]'}>

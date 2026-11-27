@@ -42,6 +42,11 @@ import {
   WheelSpinRecord,
 } from '../services/courseService';
 import {
+  makeStudentAccountId,
+  resetStudentAccountPassword,
+  StudentAccount,
+} from '../services/studentAuthService';
+import {
   computeStudentSemesterSummary,
   formatGradeValue,
   formatScheduledDateRu,
@@ -78,6 +83,7 @@ interface AdminDashboardProps {
   allFeedback: FeedbackEntry[];
   bonusSubmissions: BonusSubmission[];
   wheelSpins: WheelSpinRecord[];
+  studentAccounts: Record<string, StudentAccount>;
   missions: Mission[];
   customDocs: Record<string, LessonData>;
   globalTimer: GlobalTimerState | null;
@@ -101,6 +107,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   allFeedback,
   bonusSubmissions,
   wheelSpins,
+  studentAccounts,
   missions,
   customDocs,
   globalTimer,
@@ -2196,22 +2203,51 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                   </form>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-2">
-                    {activeRosterGroup.students.map((st) => (
-                      <div
-                        key={st}
-                        className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[#11171D] border border-[#24303C] text-xs"
-                      >
-                        <span className="truncate text-[#E6EDF3]">{st}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveStudent(activeRosterGroup.id, st)}
-                          className="text-[#7C8D9C] hover:text-[#E06C75] shrink-0 cursor-pointer"
-                          title="Удалить студента"
+                    {activeRosterGroup.students.map((st) => {
+                      const accId = makeStudentAccountId(activeRosterGroup.name, st);
+                      const isRegistered = Boolean(studentAccounts[accId]);
+                      return (
+                        <div
+                          key={st}
+                          className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-[#11171D] border border-[#24303C] text-xs"
                         >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                          <div className="min-w-0 flex items-center gap-1.5">
+                            {isRegistered && (
+                              <span title="Пароль задан" className="inline-flex shrink-0">
+                                <Lock className="w-3 h-3 text-[#9ED164]" />
+                              </span>
+                            )}
+                            <span className="truncate text-[#E6EDF3]">{st}</span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isRegistered && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await resetStudentAccountPassword(accId);
+                                  setRosterSaveMsg(
+                                    `Пароль для «${st}» сброшен — студент сможет задать новый при входе.`
+                                  );
+                                  window.setTimeout(() => setRosterSaveMsg(null), 4000);
+                                }}
+                                className="px-1.5 py-0.5 rounded border border-[#344656] text-[10px] font-mono text-[#E5A454] hover:border-[#E5A454] cursor-pointer"
+                                title="Сбросить пароль студента"
+                              >
+                                Сброс пароля
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveStudent(activeRosterGroup.id, st)}
+                              className="text-[#7C8D9C] hover:text-[#E06C75] shrink-0 cursor-pointer"
+                              title="Удалить студента"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (

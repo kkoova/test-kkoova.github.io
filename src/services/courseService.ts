@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -10,6 +11,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   where,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
@@ -605,22 +607,160 @@ export function subscribeBonusConfig(
   };
 }
 
+export interface AuthoritativeServerTime {
+  serverNowMs: number;
+  dateKey: string;
+  clockTampered: boolean;
+  source: 'firestore' | 'http_header';
+}
+
+export interface WheelLimitState {
+  uid: string;
+  dateKey: string;
+  count: number;
+  maxDateKey: string;
+  updatedAtMs: number;
+}
+
+const LOCAL_WHEEL_LIMIT_PREFIX = 'mobile_godot_wheel_limit_v2_';
+
+export function formatServerDateKey(ms: number): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Moscow',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    const d = new Date(ms + 3 * 3600 * 1000);
+    return d.toISOString().slice(0, 10);
+  }
+}
+
 export function getTodayDateKey(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return formatServerDateKey(Date.now());
+}
+
+export async function fetchAuthoritativeServerTime(
+  uid?: string | null
+): Promise<AuthoritativeServerTime> {
+  let serverNowMs: number | null = null;
+  let source: 'firestore' | 'http_header' = 'http_header';
+
+  // 1. Try Google Cloud Firestore serverTimestamp() probe (impossible to spoof via OS clock)
+  if (uid) {
+    try {
+      const probeRef = doc(db, 'godot_wheel_time_probe', uid);
+      await setDoc(probeRef, { ping: serverTimestamp(), uid });
+      const snap = await getDoc(probeRef);
+      const ts = snap.data()?.ping as Timestamp | undefined;
+      if (ts && typeof ts.toMillis === 'function') {
+        serverNowMs = ts.toMillis();
+        source = 'firestore';
+      }
+    } catch {
+      // fallback to HTTP Date header
+    }
+  }
+
+  // 2. Fallback / verify via same-origin cloud server HTTP Date header
+  if (serverNowMs === null && typeof window !== 'undefined') {
+    try {
+      const res = await fetch(`${window.location.origin}/?__ts=${Date.now()}`, {
+        method: 'HEAD',
+        cache: 'no-store',
+      });
+      const dateHeader = res.headers.get('date');
+      if (dateHeader) {
+        const parsed = Date.parse(dateHeader);
+        if (!Number.isNaN(parsed)) {
+          serverNowMs = parsed;
+          source = 'http_header';
+        }
+      }
+    } catch {
+      // network error
+    }
+  }
+
+  if (serverNowMs === null) {
+    throw new Error(
+      'Не удалось проверить серверное время. Проверьте подключение к интернету.'
+    );
+  }
+
+  const clockTampered = Math.abs(serverNowMs - Date.now()) > 10 * 60 * 1000;
+  return {
+    serverNowMs,
+    dateKey: formatServerDateKey(serverNowMs),
+    clockTampered,
+    source,
+  };
+}
+
+function readLocalWheelLimit(uid: string): WheelLimitState | null {
+  try {
+    const raw = localStorage.getItem(`${LOCAL_WHEEL_LIMIT_PREFIX}${uid}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalWheelLimit(limitState: WheelLimitState) {
+  try {
+    localStorage.setItem(
+      `${LOCAL_WHEEL_LIMIT_PREFIX}${limitState.uid}`,
+      JSON.stringify(limitState)
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export function subscribeWheelLimit(
+  uid: string | null,
+  onUpdate: (state: WheelLimitState | null) => void
+): () => void {
+  if (!uid) {
+    onUpdate(null);
+    return () => {};
+  }
+
+  onUpdate(readLocalWheelLimit(uid));
+
+  const unsub = onSnapshot(
+    doc(db, 'godot_wheel_limits', uid),
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(readLocalWheelLimit(uid));
+        return;
+      }
+      const data = snap.data() as WheelLimitState;
+      writeLocalWheelLimit(data);
+      onUpdate(data);
+    },
+    () => {
+      onUpdate(readLocalWheelLimit(uid));
+    }
+  );
+
+  return unsub;
 }
 
 export async function recordWheelSpin(
-  entry: Omit<WheelSpinRecord, 'id' | 'dateKey' | 'timestampMs'>
+  entry: Omit<WheelSpinRecord, 'id' | 'dateKey' | 'timestampMs'> & {
+    serverDateKey: string;
+    serverNowMs: number;
+  }
 ): Promise<WheelSpinRecord> {
+  const { serverDateKey, serverNowMs, ...rest } = entry;
   const record: WheelSpinRecord = {
-    ...entry,
-    id: `spin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    dateKey: getTodayDateKey(),
-    timestampMs: Date.now(),
+    ...rest,
+    id: `spin_${serverNowMs}_${Math.random().toString(36).slice(2, 6)}`,
+    dateKey: serverDateKey,
+    timestampMs: serverNowMs,
   };
 
   const local = readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY);
@@ -628,8 +768,52 @@ export async function recordWheelSpin(
   writeLocalArray(LOCAL_WHEEL_SPINS_KEY, nextLocal);
   getCourseChannel()?.postMessage({ kind: 'wheel_spins_update', items: nextLocal });
 
+  // Update persistent monotonic daily counter in Firestore
+  const prevLimit = readLocalWheelLimit(entry.uid);
+  const currentCount =
+    prevLimit && prevLimit.dateKey === serverDateKey ? prevLimit.count : 0;
+  const maxDateKey =
+    prevLimit && prevLimit.maxDateKey > serverDateKey
+      ? prevLimit.maxDateKey
+      : serverDateKey;
+  const nextLimit: WheelLimitState = {
+    uid: entry.uid,
+    dateKey: serverDateKey,
+    count: currentCount + 1,
+    maxDateKey,
+    updatedAtMs: serverNowMs,
+  };
+  writeLocalWheelLimit(nextLimit);
+
   try {
-    await setDoc(doc(db, 'godot_wheel_spins', record.id), record);
+    await setDoc(doc(db, 'godot_wheel_spins', record.id), {
+      ...record,
+      serverCreatedAt: serverTimestamp(),
+    });
+    const limitSnap = await getDoc(doc(db, 'godot_wheel_limits', entry.uid));
+    let remoteCount = 0;
+    let remoteMaxDate = serverDateKey;
+    if (limitSnap.exists()) {
+      const d = limitSnap.data() as WheelLimitState;
+      if (d.dateKey === serverDateKey) {
+        remoteCount = Math.max(currentCount, Number(d.count) || 0);
+      }
+      if (d.maxDateKey && d.maxDateKey > remoteMaxDate) {
+        remoteMaxDate = d.maxDateKey;
+      }
+    }
+    const authoritativeLimit: WheelLimitState = {
+      uid: entry.uid,
+      dateKey: serverDateKey,
+      count: Math.max(nextLimit.count, remoteCount + 1),
+      maxDateKey: remoteMaxDate,
+      updatedAtMs: serverNowMs,
+    };
+    writeLocalWheelLimit(authoritativeLimit);
+    await setDoc(doc(db, 'godot_wheel_limits', entry.uid), {
+      ...authoritativeLimit,
+      serverUpdatedAt: serverTimestamp(),
+    });
   } catch (err) {
     console.warn('Firestore wheel spin save failed, saved locally:', err);
   }
@@ -650,7 +834,18 @@ export function subscribeWheelSpins(
   const unsubFirestore = onSnapshot(
     q,
     (snap) => {
-      const remote = snap.docs.map((d) => d.data() as WheelSpinRecord);
+      const remote = snap.docs.map((d) => {
+        const raw = d.data() as WheelSpinRecord & { serverCreatedAt?: Timestamp };
+        if (raw.serverCreatedAt && typeof raw.serverCreatedAt.toMillis === 'function') {
+          const srvMs = raw.serverCreatedAt.toMillis();
+          return {
+            ...raw,
+            timestampMs: srvMs,
+            dateKey: formatServerDateKey(srvMs),
+          };
+        }
+        return raw as WheelSpinRecord;
+      });
       const map = new Map<string, WheelSpinRecord>();
       for (const l of readLocalArray<WheelSpinRecord>(LOCAL_WHEEL_SPINS_KEY)) map.set(l.id, l);
       for (const r of remote) map.set(r.id, r);

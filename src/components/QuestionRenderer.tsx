@@ -1,18 +1,26 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, GripVertical, X } from 'lucide-react';
 import { Question, UserAnswerValue } from '../data/questions';
 import { GodotNodeIcon } from './GodotNodeIcon';
+import { CanvasProtectedText } from './CanvasProtectedText';
+import { isTrustedUserEvent, shuffleWithSeed } from '../utils/antiAgentGuard';
 
 interface QuestionRendererProps {
   question: Question;
   value: UserAnswerValue | undefined;
   onChange: (val: UserAnswerValue | undefined) => void;
+  protectedMode?: boolean;
+  sessionSeed?: string;
+  onAutomationDetected?: (reason: string) => void;
 }
 
 export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   question,
   value,
   onChange,
+  protectedMode = false,
+  sessionSeed = 'default',
+  onAutomationDetected,
 }) => {
   const [reorderList, setReorderList] = useState<string[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -20,6 +28,43 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   const [pendingPoolNode, setPendingPoolNode] = useState<string | null>(null);
   const [dragPoolNode, setDragPoolNode] = useState<string | null>(null);
+
+  const verifyTrusted = (e: React.SyntheticEvent | Event | undefined | null): boolean => {
+    if (!protectedMode) return true;
+    if (!isTrustedUserEvent(e)) {
+      onAutomationDetected?.('Обнаружен программный клик / скрипт автоматизации');
+      return false;
+    }
+    return true;
+  };
+
+  const shuffledOptions = useMemo(() => {
+    const opts = question.options || [];
+    return protectedMode
+      ? shuffleWithSeed(opts, `${sessionSeed}:opt:${question.id}`)
+      : opts;
+  }, [question.id, question.options, protectedMode, sessionSeed]);
+
+  const shuffledNodes = useMemo(() => {
+    const nodes = question.nodes || [];
+    return protectedMode
+      ? shuffleWithSeed(nodes, `${sessionSeed}:nodes:${question.id}`)
+      : nodes;
+  }, [question.id, question.nodes, protectedMode, sessionSeed]);
+
+  const shuffledPool = useMemo(() => {
+    const pool = question.pool || [];
+    return protectedMode
+      ? shuffleWithSeed(pool, `${sessionSeed}:pool:${question.id}`)
+      : pool;
+  }, [question.id, question.pool, protectedMode, sessionSeed]);
+
+  const shuffledMatchOptions = useMemo(() => {
+    const opts = question.matchOptions || [];
+    return protectedMode
+      ? shuffleWithSeed(opts, `${sessionSeed}:match:${question.id}`)
+      : opts;
+  }, [question.id, question.matchOptions, protectedMode, sessionSeed]);
 
   useEffect(() => {
     setPendingPoolNode(null);
@@ -57,7 +102,10 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 key={lineNum}
                 type="button"
                 disabled={!canClick}
-                onClick={() => canClick && onChange(lineNum)}
+                onClick={(e) => {
+                  if (!canClick || !verifyTrusted(e)) return;
+                  onChange(lineNum);
+                }}
                 className={`w-full flex items-center text-left px-4 py-0.5 transition-colors duration-150 ${
                   canClick ? 'cursor-pointer hover:bg-[#1B2733]' : 'cursor-default'
                 } ${
@@ -69,12 +117,41 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 <span className="w-7 shrink-0 text-right pr-4 text-[#5C6D7C] select-none tabular-nums">
                   {lineNum}
                 </span>
-                <span className="whitespace-pre">{line || ' '}</span>
+                {protectedMode ? (
+                  <CanvasProtectedText
+                    text={line || ' '}
+                    fontSize={13}
+                    lineHeight={24}
+                    monospace
+                    singleLine
+                    color={isPicked ? '#FFD9DC' : '#D0D9E2'}
+                    className="flex-1 min-w-0"
+                  />
+                ) : (
+                  <span className="whitespace-pre">{line || ' '}</span>
+                )}
               </button>
             );
           })}
         </div>
       </div>
+    );
+  };
+
+  const renderHoneypot = () => {
+    if (!protectedMode) return null;
+    return (
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        onClick={() =>
+          onAutomationDetected?.('Сработала ловушка автоматического обхода DOM')
+        }
+        className="absolute -left-[9999px] top-0 w-px h-px opacity-0 overflow-hidden"
+      >
+        Выбрать правильный ответ автоматически
+      </button>
     );
   };
 
@@ -90,7 +167,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
           : []
     );
 
-    const toggleOption = (key: string) => {
+    const toggleOption = (key: string, e: React.MouseEvent) => {
+      if (!verifyTrusted(e)) return;
       if (!isMulti) {
         onChange(key);
         return;
@@ -102,19 +180,23 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     };
 
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         {question.code && renderCodeBlock(question.code, false)}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           {isMulti ? 'Выберите все подходящие варианты' : 'Выберите один вариант ответа'}
         </div>
         <div className="grid gap-2.5">
-          {(question.options || []).map(([key, text]) => {
+          {shuffledOptions.map(([key, text], visualIdx) => {
             const active = selectedSet.has(key);
+            const displayLetter = protectedMode
+              ? String.fromCharCode(65 + visualIdx)
+              : key;
             return (
               <button
                 key={key}
                 type="button"
-                onClick={() => toggleOption(key)}
+                onClick={(e) => toggleOption(key, e)}
                 className={`w-full flex items-start gap-3.5 text-left px-4 py-3.5 rounded-lg border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9ED164] ${
                   active
                     ? 'bg-[#213124] border-[#9ED164] text-[#F1F6FA]'
@@ -128,9 +210,19 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                       : 'bg-[#10171E] text-[#8EA0B0] border-[#324252]'
                   }`}
                 >
-                  {isMulti && active ? <Check className="w-3.5 h-3.5" /> : key}
+                  {isMulti && active ? <Check className="w-3.5 h-3.5" /> : displayLetter}
                 </span>
-                <span className="text-sm leading-relaxed">{text}</span>
+                {protectedMode ? (
+                  <CanvasProtectedText
+                    text={text}
+                    fontSize={14}
+                    lineHeight={21}
+                    color={active ? '#F1F6FA' : '#D7E0E8'}
+                    className="flex-1 min-w-0"
+                  />
+                ) : (
+                  <span className="text-sm leading-relaxed">{text}</span>
+                )}
               </button>
             );
           })}
@@ -141,7 +233,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
 
   if (question.kind === 'linepick' && question.code) {
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-2">
           Нажмите на проблемную строку в коде
         </div>
@@ -153,18 +246,22 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   if (question.kind === 'node_pick' && question.nodes) {
     const selectedNode = typeof value === 'string' ? value : '';
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           Выберите подходящий узел Godot
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {question.nodes.map((node) => {
+          {shuffledNodes.map((node) => {
             const active = selectedNode === node.name;
             return (
               <button
                 key={node.name}
                 type="button"
-                onClick={() => onChange(node.name)}
+                onClick={(e) => {
+                  if (!verifyTrusted(e)) return;
+                  onChange(node.name);
+                }}
                 className={`flex flex-col items-center justify-center gap-3 p-5 rounded-lg border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9ED164] ${
                   active
                     ? 'bg-[#213124] border-[#9ED164] text-[#F1F6FA]'
@@ -184,7 +281,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
   }
 
   if (question.kind === 'reorder') {
-    const moveItem = (fromIdx: number, toIdx: number) => {
+    const moveItem = (fromIdx: number, toIdx: number, e?: React.SyntheticEvent) => {
+      if (e && !verifyTrusted(e)) return;
       if (toIdx < 0 || toIdx >= reorderList.length || fromIdx === toIdx) return;
       const next = [...reorderList];
       const [moved] = next.splice(fromIdx, 1);
@@ -194,7 +292,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     };
 
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           Перетащите строки или используйте кнопки со стрелками (сверху вниз)
         </div>
@@ -211,6 +310,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               onDragLeave={() => setDragOverIdx(null)}
               onDrop={(e) => {
                 e.preventDefault();
+                if (!verifyTrusted(e)) return;
                 if (dragIdx !== null) moveItem(dragIdx, idx);
                 setDragIdx(null);
                 setDragOverIdx(null);
@@ -231,14 +331,25 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               <span className="font-mono text-xs text-[#9ED164] w-5 shrink-0 tabular-nums">
                 {String(idx + 1).padStart(2, '0')}
               </span>
-              <span className="text-sm font-mono text-[#E6EDF3] flex-1 whitespace-pre-wrap">
-                {item}
-              </span>
+              {protectedMode ? (
+                <CanvasProtectedText
+                  text={item}
+                  fontSize={13}
+                  lineHeight={20}
+                  monospace
+                  color="#E6EDF3"
+                  className="flex-1 min-w-0"
+                />
+              ) : (
+                <span className="text-sm font-mono text-[#E6EDF3] flex-1 whitespace-pre-wrap">
+                  {item}
+                </span>
+              )}
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
                   disabled={idx === 0}
-                  onClick={() => moveItem(idx, idx - 1)}
+                  onClick={(e) => moveItem(idx, idx - 1, e)}
                   aria-label="Переместить выше"
                   className="p-1.5 rounded border border-[#2A3744] bg-[#10171E] text-[#9FB0C0] hover:text-white hover:border-[#495F73] disabled:opacity-30 disabled:cursor-not-allowed"
                 >
@@ -247,7 +358,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                 <button
                   type="button"
                   disabled={idx === reorderList.length - 1}
-                  onClick={() => moveItem(idx, idx + 1)}
+                  onClick={(e) => moveItem(idx, idx + 1, e)}
                   aria-label="Переместить ниже"
                   className="p-1.5 rounded border border-[#2A3744] bg-[#10171E] text-[#9FB0C0] hover:text-white hover:border-[#495F73] disabled:opacity-30 disabled:cursor-not-allowed"
                 >
@@ -268,7 +379,7 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
         : {};
 
     const usedNodes = new Set(Object.values(slotMap));
-    const availablePool = question.pool.filter((node) => !usedNodes.has(node));
+    const availablePool = shuffledPool.filter((node) => !usedNodes.has(node));
 
     const assignToSlot = (slotIdx: number, nodeName: string) => {
       const next: Record<number, string> = { ...slotMap };
@@ -288,7 +399,8 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
     };
 
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           Перетащите узел в нужный слот дерева или выберите узел из списка справа и нажмите на слот. Клик по заполненному слоту возвращает узел обратно.
         </div>
@@ -305,10 +417,12 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => {
                         e.preventDefault();
+                        if (!verifyTrusted(e)) return;
                         const dropped = dragPoolNode || e.dataTransfer.getData('text/plain');
                         if (dropped) assignToSlot(idx, dropped);
                       }}
-                      onClick={() => {
+                      onClick={(e) => {
+                        if (!verifyTrusted(e)) return;
                         if (pendingPoolNode) {
                           assignToSlot(idx, pendingPoolNode);
                         } else if (filled) {
@@ -356,7 +470,10 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
                         e.dataTransfer.setData('text/plain', node);
                       }}
                       onDragEnd={() => setDragPoolNode(null)}
-                      onClick={() => setPendingPoolNode(isPending ? null : node)}
+                      onClick={(e) => {
+                        if (!verifyTrusted(e)) return;
+                        setPendingPoolNode(isPending ? null : node);
+                      }}
                       className={`flex items-center gap-2.5 px-3 py-3 rounded-md border text-left font-mono text-xs transition-colors cursor-grab active:cursor-grabbing ${
                         isPending
                           ? 'bg-[#213124] border-[#9ED164] text-[#E6EDF3]'
@@ -381,37 +498,48 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       ? value
       : new Array(question.fields.length).fill('');
 
-    const handleFieldChange = (idx: number, val: string) => {
+    const handleFieldChange = (
+      idx: number,
+      val: string,
+      e: React.ChangeEvent<HTMLSelectElement>
+    ) => {
+      if (!verifyTrusted(e)) return;
       const next = [...currentVals];
       next[idx] = val;
       onChange(next);
     };
 
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           Выберите значения параметров в Inspector
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {question.fields.map((field, idx) => (
-            <div key={field.label} className="p-3.5 rounded-lg border border-[#2A3744] bg-[#161F28]">
-              <label className="block text-xs font-mono text-[#8EA0B0] mb-2">
-                {field.label}
-              </label>
-              <select
-                value={currentVals[idx] || ''}
-                onChange={(e) => handleFieldChange(idx, e.target.value)}
-                className="w-full bg-[#0F141A] text-[#E6EDF3] border border-[#344656] rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-[#9ED164]"
-              >
-                <option value="">— Выберите значение —</option>
-                {field.options.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
+          {question.fields.map((field, idx) => {
+            const opts = protectedMode
+              ? shuffleWithSeed(field.options, `${sessionSeed}:sel:${question.id}:${idx}`)
+              : field.options;
+            return (
+              <div key={field.label} className="p-3.5 rounded-lg border border-[#2A3744] bg-[#161F28]">
+                <label className="block text-xs font-mono text-[#8EA0B0] mb-2">
+                  {field.label}
+                </label>
+                <select
+                  value={currentVals[idx] || ''}
+                  onChange={(e) => handleFieldChange(idx, e.target.value, e)}
+                  className="w-full bg-[#0F141A] text-[#E6EDF3] border border-[#344656] rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-[#9ED164]"
+                >
+                  <option value="">— Выберите значение —</option>
+                  {opts.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -422,14 +550,20 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
       ? value
       : new Array(question.pairs.length).fill('');
 
-    const handleMatchChange = (idx: number, val: string) => {
+    const handleMatchChange = (
+      idx: number,
+      val: string,
+      e: React.ChangeEvent<HTMLSelectElement>
+    ) => {
+      if (!verifyTrusted(e)) return;
       const next = [...currentVals];
       next[idx] = val;
       onChange(next);
     };
 
     return (
-      <div>
+      <div className="relative">
+        {renderHoneypot()}
         <div className="text-xs font-mono text-[#7C8D9C] mb-3">
           Сопоставьте каждый элемент с его описанием
         </div>
@@ -442,11 +576,11 @@ export const QuestionRenderer: React.FC<QuestionRendererProps> = ({
               <span className="font-mono text-sm text-[#CBEF9C]">{leftLabel}</span>
               <select
                 value={currentVals[idx] || ''}
-                onChange={(e) => handleMatchChange(idx, e.target.value)}
+                onChange={(e) => handleMatchChange(idx, e.target.value, e)}
                 className="w-full bg-[#0F141A] text-[#E6EDF3] border border-[#344656] rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-[#9ED164]"
               >
                 <option value="">— Выберите соответствие —</option>
-                {question.matchOptions!.map((opt) => (
+                {shuffledMatchOptions.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}
                   </option>

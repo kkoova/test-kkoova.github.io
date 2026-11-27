@@ -118,6 +118,7 @@ const BONUS_CHALLENGES: BonusChallenge[] = [
 interface BonusTaskViewProps {
   roster: GroupRoster[];
   defaultStudentHint?: string | null;
+  lockedStudent?: { group: string; studentName: string } | null;
   isAdmin: boolean;
   bonusConfig: BonusConfig;
   bonusSubmissions: BonusSubmission[];
@@ -126,6 +127,7 @@ interface BonusTaskViewProps {
 export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
   roster,
   defaultStudentHint,
+  lockedStudent = null,
   isAdmin,
   bonusConfig,
   bonusSubmissions,
@@ -133,8 +135,11 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
   const [mode, setMode] = useState<'quiz' | 'project'>(() =>
     bonusConfig.showQuiz ? 'quiz' : 'project'
   );
-  const [selectedGroup, setSelectedGroup] = useState<string>(roster[0]?.name || '');
+  const [selectedGroup, setSelectedGroup] = useState<string>(
+    () => lockedStudent?.group || roster[0]?.name || ''
+  );
   const [selectedStudent, setSelectedStudent] = useState<string>(() => {
+    if (lockedStudent?.studentName) return lockedStudent.studentName;
     if (!defaultStudentHint) return '';
     const lower = defaultStudentHint.trim().toLowerCase();
     for (const grp of roster) {
@@ -143,6 +148,13 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
     }
     return '';
   });
+
+  useEffect(() => {
+    if (lockedStudent) {
+      setSelectedGroup(lockedStudent.group);
+      setSelectedStudent(lockedStudent.studentName);
+    }
+  }, [lockedStudent]);
 
   // Teacher editor state
   const [editorOpen, setEditorOpen] = useState(false);
@@ -600,47 +612,57 @@ export const BonusTaskView: React.FC<BonusTaskViewProps> = ({
 
       {/* Student Identification Bar */}
       {!showBothDisabled && (
-        <section className="rounded-xl border border-[#2A3744] bg-[#161E27] p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
-              Ваша учебная группа
-            </label>
-            <select
-              value={selectedGroup}
-              onChange={(e) => {
-                setSelectedGroup(e.target.value);
-                setSelectedStudent('');
-              }}
-              className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164]"
-            >
-              <option value="">— Выберите группу —</option>
-              {roster.map((g) => (
-                <option key={g.id} value={g.name}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </div>
+        lockedStudent ? (
+          <section className="rounded-xl border border-[#4A683B] bg-[#17231B] px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="text-[#CBEF9C]">
+              Вы вошли как <strong className="text-white">{lockedStudent.studentName}</strong> ·{' '}
+              <span className="font-mono">{lockedStudent.group}</span>
+            </div>
+            <span className="font-mono text-[#9ED164]">Профиль привязан автоматически</span>
+          </section>
+        ) : (
+          <section className="rounded-xl border border-[#2A3744] bg-[#161E27] p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
+                Ваша учебная группа
+              </label>
+              <select
+                value={selectedGroup}
+                onChange={(e) => {
+                  setSelectedGroup(e.target.value);
+                  setSelectedStudent('');
+                }}
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164]"
+              >
+                <option value="">— Выберите группу —</option>
+                {roster.map((g) => (
+                  <option key={g.id} value={g.name}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div>
-            <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
-              Фамилия и имя
-            </label>
-            <select
-              value={selectedStudent}
-              disabled={!selectedGroup}
-              onChange={(e) => setSelectedStudent(e.target.value)}
-              className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164] disabled:opacity-45"
-            >
-              <option value="">— Выберите ваше ФИО —</option>
-              {studentsInGroup.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </section>
+            <div>
+              <label className="block text-xs font-mono text-[#8EA0B0] mb-1.5">
+                Фамилия и имя
+              </label>
+              <select
+                value={selectedStudent}
+                disabled={!selectedGroup}
+                onChange={(e) => setSelectedStudent(e.target.value)}
+                className="w-full bg-[#0F141A] border border-[#344656] rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#9ED164] disabled:opacity-45"
+              >
+                <option value="">— Выберите ваше ФИО —</option>
+                {studentsInGroup.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </section>
+        )
       )}
 
       {showBothDisabled && (

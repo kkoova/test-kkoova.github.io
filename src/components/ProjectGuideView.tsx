@@ -54,28 +54,39 @@ function saveStoredStudentSelection(group: string, student: string) {
   }
 }
 
-function useSelectedStudent(roster: GroupRoster[], defaultStudentHint?: string | null) {
+function useSelectedStudent(
+  roster: GroupRoster[],
+  defaultStudentHint?: string | null,
+  lockedStudent?: { group: string; studentName: string } | null
+) {
   const [selectedGroup, setSelectedGroup] = useState<string>(() => {
+    if (lockedStudent?.group) return lockedStudent.group;
     const stored = readStoredStudentSelection();
     if (stored && roster.some((g) => g.name === stored.group)) return stored.group;
     return roster[0]?.name || '';
   });
 
   const [selectedStudent, setSelectedStudent] = useState<string>(() => {
+    if (lockedStudent?.studentName) return lockedStudent.studentName;
     const stored = readStoredStudentSelection();
     if (stored?.student) return stored.student;
     return '';
   });
 
   useEffect(() => {
+    if (lockedStudent) {
+      setSelectedGroup(lockedStudent.group);
+      setSelectedStudent(lockedStudent.studentName);
+      return;
+    }
     if (!roster.some((g) => g.name === selectedGroup)) {
       const firstGroup = roster[0]?.name || '';
       setSelectedGroup(firstGroup);
     }
-  }, [roster, selectedGroup]);
+  }, [roster, selectedGroup, lockedStudent]);
 
   useEffect(() => {
-    if (selectedStudent || !defaultStudentHint) return;
+    if (lockedStudent || selectedStudent || !defaultStudentHint) return;
     const hintLower = defaultStudentHint.trim().toLowerCase();
     for (const grp of roster) {
       const found = grp.students.find((s) => s.toLowerCase() === hintLower);
@@ -86,26 +97,28 @@ function useSelectedStudent(roster: GroupRoster[], defaultStudentHint?: string |
         break;
       }
     }
-  }, [defaultStudentHint, roster, selectedStudent]);
+  }, [defaultStudentHint, roster, selectedStudent, lockedStudent]);
 
   const groupStudents = useMemo(() => {
     return roster.find((g) => g.name === selectedGroup)?.students || [];
   }, [roster, selectedGroup]);
 
   const handleGroupChange = (grpName: string) => {
+    if (lockedStudent) return;
     setSelectedGroup(grpName);
     setSelectedStudent('');
     saveStoredStudentSelection(grpName, '');
   };
 
   const handleStudentChange = (stName: string) => {
+    if (lockedStudent) return;
     setSelectedStudent(stName);
     saveStoredStudentSelection(selectedGroup, stName);
   };
 
   return {
-    selectedGroup,
-    selectedStudent,
+    selectedGroup: lockedStudent ? lockedStudent.group : selectedGroup,
+    selectedStudent: lockedStudent ? lockedStudent.studentName : selectedStudent,
     groupStudents,
     handleGroupChange,
     handleStudentChange,
@@ -133,6 +146,7 @@ interface ProjectGuideBannerProps {
   gradebook: GradebookConfig;
   roster: GroupRoster[];
   defaultStudentHint?: string | null;
+  lockedStudent?: { group: string; studentName: string } | null;
   onOpenGuide: () => void;
 }
 
@@ -141,6 +155,7 @@ export const ProjectGuideBanner: React.FC<ProjectGuideBannerProps> = ({
   gradebook,
   roster,
   defaultStudentHint,
+  lockedStudent = null,
   onOpenGuide,
 }) => {
   const {
@@ -149,7 +164,7 @@ export const ProjectGuideBanner: React.FC<ProjectGuideBannerProps> = ({
     groupStudents,
     handleGroupChange,
     handleStudentChange,
-  } = useSelectedStudent(roster, defaultStudentHint);
+  } = useSelectedStudent(roster, defaultStudentHint, lockedStudent);
 
   const scheduledGroups = roster
     .map((g) => ({
@@ -246,34 +261,40 @@ export const ProjectGuideBanner: React.FC<ProjectGuideBannerProps> = ({
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-white">
             <UserCheck className="w-4 h-4 text-[#9ED164] shrink-0" />
-            <span>Быстрая проверка моих оценок и статуса итогового теста:</span>
+            <span>
+              {lockedStudent
+                ? `Ваши оценки и статус итогового теста (${lockedStudent.studentName} · ${lockedStudent.group}):`
+                : 'Быстрая проверка оценок и статуса итогового теста:'}
+            </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={selectedGroup}
-              onChange={(e) => handleGroupChange(e.target.value)}
-              className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#9ED164]"
-            >
-              {roster.map((g) => (
-                <option key={g.id} value={g.name}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedStudent}
-              onChange={(e) => handleStudentChange(e.target.value)}
-              className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#9ED164] min-w-[190px]"
-            >
-              <option value="">Выберите ФИО студента...</option>
-              {groupStudents.map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
+          {!lockedStudent && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedGroup}
+                onChange={(e) => handleGroupChange(e.target.value)}
+                className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              >
+                {roster.map((g) => (
+                  <option key={g.id} value={g.name}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={selectedStudent}
+                onChange={(e) => handleStudentChange(e.target.value)}
+                className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#9ED164] min-w-[190px]"
+              >
+                <option value="">Выберите ФИО студента...</option>
+                {groupStudents.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {selectedStudent && studentRecord && studentSummary && (
@@ -351,6 +372,7 @@ interface ProjectGuideViewProps {
   roster: GroupRoster[];
   isAdmin: boolean;
   defaultStudentHint?: string | null;
+  lockedStudent?: { group: string; studentName: string } | null;
   onBack: () => void;
 }
 
@@ -403,6 +425,7 @@ export const ProjectGuideView: React.FC<ProjectGuideViewProps> = ({
   roster,
   isAdmin,
   defaultStudentHint,
+  lockedStudent = null,
   onBack,
 }) => {
   const [editing, setEditing] = useState(false);
@@ -416,7 +439,7 @@ export const ProjectGuideView: React.FC<ProjectGuideViewProps> = ({
     groupStudents,
     handleGroupChange,
     handleStudentChange,
-  } = useSelectedStudent(roster, defaultStudentHint);
+  } = useSelectedStudent(roster, defaultStudentHint, lockedStudent);
 
   const labsTotal = Math.max(1, gradebook.labsCount || 6);
   const studentRecord = useMemo(() => {
@@ -652,40 +675,46 @@ export const ProjectGuideView: React.FC<ProjectGuideViewProps> = ({
             </h1>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            <select
-              value={selectedGroup}
-              onChange={(e) => handleGroupChange(e.target.value)}
-              className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
-            >
-              {roster.map((g) => (
-                <option key={g.id} value={g.name}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedStudent}
-              onChange={(e) => handleStudentChange(e.target.value)}
-              className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164] min-w-[210px]"
-            >
-              <option value="">Выберите свою фамилию и имя...</option>
-              {groupStudents.map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </div>
+          {lockedStudent ? (
+            <div className="px-3.5 py-2 rounded-lg border border-[#4A683B] bg-[#18241C] text-xs font-medium text-[#CBEF9C]">
+              {lockedStudent.studentName} · {lockedStudent.group}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                value={selectedGroup}
+                onChange={(e) => handleGroupChange(e.target.value)}
+                className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164]"
+              >
+                {roster.map((g) => (
+                  <option key={g.id} value={g.name}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={selectedStudent}
+                onChange={(e) => handleStudentChange(e.target.value)}
+                className="bg-[#0F141A] border border-[#344656] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#9ED164] min-w-[210px]"
+              >
+                <option value="">Выберите свою фамилию и имя...</option>
+                {groupStudents.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {!selectedStudent ? (
           <div className="p-6 rounded-lg border border-dashed border-[#344656] bg-[#11171D] text-center space-y-1.5">
             <div className="text-sm font-semibold text-white">
-              Выберите группу и своё ФИО в списке справа
+              {lockedStudent ? 'Данные ведомости загружаются' : 'Выберите группу и своё ФИО в списке справа'}
             </div>
             <p className="text-xs text-[#8EA0B0]">
-              Здесь отобразятся ваши оценки за 6 лабораторных работ, промежуточный тест, посещаемость, необходимость сдавать итоговый тест и итоговая оценка за семестр.
+              Здесь отобразятся ваши оценки за лабораторные работы, промежуточный тест, посещаемость, необходимость сдавать итоговый тест и итоговая оценка за семестр.
             </p>
           </div>
         ) : (

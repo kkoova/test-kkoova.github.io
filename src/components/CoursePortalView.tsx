@@ -20,6 +20,7 @@ interface CoursePortalViewProps {
   projectGuide: ProjectGuideConfig;
   gradebook: GradebookConfig;
   roster: GroupRoster[];
+  lockedStudent?: { group: string; studentName: string } | null;
   onOpenLesson: (tutorialDoc: string) => void;
   onOpenTest: () => void;
   onOpenProjectGuide: () => void;
@@ -42,6 +43,7 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
   projectGuide,
   gradebook,
   roster,
+  lockedStudent = null,
   onOpenLesson,
   onOpenTest,
   onOpenProjectGuide,
@@ -192,6 +194,7 @@ export const CoursePortalView: React.FC<CoursePortalViewProps> = ({
         gradebook={gradebook}
         roster={roster}
         defaultStudentHint={fallbackName}
+        lockedStudent={lockedStudent}
         onOpenGuide={onOpenProjectGuide}
       />
 

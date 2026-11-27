@@ -18,7 +18,10 @@ export type ViolationType =
   | 'window_blur'
   | 'fullscreen_exit'
   | 'context_menu'
-  | 'devtools_shortcut';
+  | 'devtools_shortcut'
+  | 'automation_detected'
+  | 'devtools_opened'
+  | 'copy_attempt';
 
 export interface ViolationEvent {
   id: string;

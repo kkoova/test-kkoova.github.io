@@ -21,6 +21,7 @@ interface ProfileModalProps {
   gradebook: GradebookConfig;
   roster: GroupRoster[];
   testSessions: StudentSession[];
+  lockedStudent?: { group: string; studentName: string } | null;
   onOpenProjectGuide: () => void;
 }
 
@@ -48,9 +49,13 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   gradebook,
   roster,
   testSessions,
+  lockedStudent = null,
   onOpenProjectGuide,
 }) => {
   const selection = useMemo(() => {
+    if (lockedStudent) {
+      return { group: lockedStudent.group, student: lockedStudent.studentName };
+    }
     const stored = readStoredStudentSelection();
     if (stored?.group && stored?.student) return stored;
     const hintLower = displayName.trim().toLowerCase();
@@ -59,7 +64,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       if (match) return { group: grp.name, student: match };
     }
     return null;
-  }, [displayName, roster, open]);
+  }, [lockedStudent, displayName, roster, open]);
 
   if (!open) return null;
 
@@ -109,7 +114,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           <div className="min-w-0">
             <div className="text-lg font-bold text-white truncate">{displayName}</div>
             <div className="text-xs font-mono text-[#8EA0B0] truncate">
-              {email || 'GitHub аккаунт'}
+              {lockedStudent
+                ? `Учебная группа: ${lockedStudent.group}`
+                : email || 'Аккаунт портала'}
             </div>
           </div>
         </div>
