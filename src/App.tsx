@@ -34,12 +34,16 @@ import {
   ViolationType,
 } from './services/telemetryService';
 import {
+  BonusSubmission,
   FeedbackEntry,
-  fetchMissions,
   GlobalTimerState,
+  LessonData,
   Mission,
   subscribeAllFeedback,
+  subscribeBonusSubmissions,
+  subscribeCustomDocs,
   subscribeGlobalTimer,
+  subscribeMissions,
 } from './services/courseService';
 import { PortalHeader } from './components/PortalHeader';
 import { CoursePortalView } from './components/CoursePortalView';
@@ -53,6 +57,9 @@ import { GlobalTimerOverlay } from './components/GlobalTimerOverlay';
 import { ProfileModal } from './components/ProfileModal';
 import { FeedbackModal } from './components/FeedbackModal';
 import { ProjectGuideBanner, ProjectGuideView } from './components/ProjectGuideView';
+import { BonusTaskView } from './components/BonusTaskView';
+import { AdhdZoneView } from './components/AdhdZoneView';
+import { GradeCasinoView } from './components/GradeCasinoView';
 
 type AppView =
   | 'course'
@@ -61,6 +68,9 @@ type AppView =
   | 'test_start'
   | 'test_active'
   | 'test_completed'
+  | 'bonus'
+  | 'adhd'
+  | 'casino'
   | 'admin'
   | 'monitor';
 
@@ -113,6 +123,7 @@ export default function App() {
 
   // Course data state
   const [missions, setMissions] = useState<Mission[]>([]);
+  const [customDocs, setCustomDocs] = useState<Record<string, LessonData>>({});
   const [missionsError, setMissionsError] = useState<string | null>(null);
   const [globalTimer, setGlobalTimer] = useState<GlobalTimerState | null>(null);
 
@@ -134,6 +145,7 @@ export default function App() {
   const [violationsFeed, setViolationsFeed] = useState<ViolationEvent[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
   const [allFeedback, setAllFeedback] = useState<FeedbackEntry[]>([]);
+  const [bonusSubmissions, setBonusSubmissions] = useState<BonusSubmission[]>([]);
 
   // Active Student Test state
   const [activeTest, setActiveTest] = useState<TestDefinition | null>(null);
@@ -184,11 +196,14 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // 2. Load missions from ./data.json
+  // 2. Subscribe to Missions (data.json + teacher web overrides) & Custom Docs
   useEffect(() => {
-    fetchMissions()
-      .then((list) => setMissions(list))
-      .catch((err: Error) => setMissionsError(err.message));
+    const unsubMissions = subscribeMissions(setMissions, setMissionsError);
+    const unsubDocs = subscribeCustomDocs(setCustomDocs);
+    return () => {
+      unsubMissions();
+      unsubDocs();
+    };
   }, []);
 
   // 3. Subscribe to Global Timer (system/timer)
@@ -212,7 +227,7 @@ export default function App() {
     };
   }, []);
 
-  // 5. Subscribe to Admin Telemetry & Course Feedback when Admin/Monitor/Profile
+  // 5. Subscribe to Admin Telemetry, Course Feedback & Bonus Submissions
   useEffect(() => {
     if (!isAdmin && view !== 'admin' && view !== 'monitor' && !profileOpen) return;
     const unsubTel = subscribeTelemetry({
@@ -221,12 +236,15 @@ export default function App() {
       onStatus: setSyncStatus,
     });
     let unsubFeed = () => {};
+    let unsubBonus = () => {};
     if (isAdmin) {
       unsubFeed = subscribeAllFeedback(setAllFeedback);
+      unsubBonus = subscribeBonusSubmissions(setBonusSubmissions);
     }
     return () => {
       unsubTel();
       unsubFeed();
+      unsubBonus();
     };
   }, [isAdmin, view, profileOpen]);
 
@@ -556,6 +574,9 @@ export default function App() {
           projectGuide={projectGuide}
           gradebook={gradebook}
           allFeedback={allFeedback}
+          bonusSubmissions={bonusSubmissions}
+          missions={missions}
+          customDocs={customDocs}
           globalTimer={globalTimer}
           adminLabel={userLabel}
           onGradebookChange={setGradebook}
@@ -723,13 +744,19 @@ export default function App() {
     );
   }
 
-  // 4. Unified Portal Shell (Start Page, Course Map, Project Guide, Lesson Reader, Test Start, Test Results)
+  // 4. Unified Portal Shell (Start Page, Course Map, Project Guide, Lesson Reader, Test Start, Test Results, Bonus, ADHD, Casino)
   const activeHeaderSection =
     view === 'project'
       ? 'project'
       : view === 'test_start' || view === 'test_completed'
         ? 'test'
-        : 'course';
+        : view === 'bonus'
+          ? 'bonus'
+          : view === 'adhd'
+            ? 'adhd'
+            : view === 'casino'
+              ? 'casino'
+              : 'course';
 
   return (
     <div className="min-h-screen bg-[#0F141A] text-[#E6EDF3] flex flex-col">
@@ -738,7 +765,12 @@ export default function App() {
       <PortalHeader
         activeSection={activeHeaderSection}
         onNavigate={(sec) => {
-          setView(sec === 'test' ? 'test_start' : sec === 'project' ? 'project' : 'course');
+          if (sec === 'test') setView('test_start');
+          else if (sec === 'project') setView('project');
+          else if (sec === 'bonus') setView('bonus');
+          else if (sec === 'adhd') setView('adhd');
+          else if (sec === 'casino') setView('casino');
+          else setView('course');
         }}
         isSignedIn={isSignedIn}
         isAdmin={isAdmin}
@@ -758,7 +790,19 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1">
-        {view === 'project' ? (
+        {view === 'bonus' ? (
+          <BonusTaskView
+            roster={roster}
+            defaultStudentHint={studentViewMode ? null : firebaseUser?.displayName || null}
+          />
+        ) : view === 'adhd' ? (
+          <AdhdZoneView missions={missions} />
+        ) : view === 'casino' ? (
+          <GradeCasinoView
+            onOpenBonus={() => setView('bonus')}
+            onOpenTests={() => setView('test_start')}
+          />
+        ) : view === 'project' ? (
           <ProjectGuideView
             guide={projectGuide}
             gradebook={gradebook}

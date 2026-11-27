@@ -1,37 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Check, Clock, Copy, ExternalLink } from 'lucide-react';
-import { triggerGlobalTimer } from '../services/courseService';
-
-interface LessonTreeNode {
-  name: string;
-  type: string;
-  level: number;
-}
-
-type LessonItem =
-  | { type: 'text'; val: string }
-  | { type: 'button'; text: string; url: string }
-  | { type: 'config'; data: [string, string][] }
-  | { type: 'tip'; val: string }
-  | { type: 'instruction'; val: string }
-  | { type: 'timer'; minutes: number; goals: string[] }
-  | { type: 'grid'; items: string[] }
-  | { type: 'tree'; nodes: LessonTreeNode[] }
-  | { type: 'code'; title?: string; code: string }
-  | { type: 'image'; url: string; caption?: string };
-
-interface LessonPhase {
-  id: string;
-  label: string;
-  header: string;
-  items: LessonItem[];
-}
-
-interface LessonData {
-  unit: string;
-  title: string;
-  phases: LessonPhase[];
-}
+import { ArrowLeft, Check, Clock, Copy, ExternalLink, Skull } from 'lucide-react';
+import {
+  fetchLessonDoc,
+  LessonData,
+  triggerGlobalTimer,
+} from '../services/courseService';
 
 interface LessonViewProps {
   docName: string;
@@ -72,11 +45,7 @@ export const LessonView: React.FC<LessonViewProps> = ({ docName, isAdmin, onBack
     let active = true;
     setLoading(true);
     setError(null);
-    fetch(`./assets/docs/${docName}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Методичка «${docName}» не найдена`);
-        return res.json();
-      })
+    fetchLessonDoc(docName)
       .then((data) => {
         if (active) {
           setLesson(data);
@@ -102,6 +71,8 @@ export const LessonView: React.FC<LessonViewProps> = ({ docName, isAdmin, onBack
     });
   };
 
+  const isTenthEasterEgg = docName.trim() === '10.json';
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -123,12 +94,39 @@ export const LessonView: React.FC<LessonViewProps> = ({ docName, isAdmin, onBack
       )}
 
       {error && (
-        <div className="rounded-xl border border-[#E5A454]/40 bg-[#1F1A14] p-8 text-center space-y-3">
-          <div className="text-base font-bold text-[#E5A454]">{error}</div>
-          <p className="text-xs text-[#C7B49B] max-w-md mx-auto">
-            Файл с описанием урока должен находиться по пути <code className="text-[#CBEF9C]">assets/docs/{docName}</code>.
-          </p>
-        </div>
+        isTenthEasterEgg ? (
+          <div className="rounded-xl border border-[#E06C75]/50 bg-[#1B1215] p-10 text-center space-y-4 shadow-xl">
+            <div className="w-14 h-14 mx-auto rounded-full bg-[#2E181D] border border-[#E06C75]/50 flex items-center justify-center text-[#E06C75]">
+              <Skull className="w-7 h-7" />
+            </div>
+            <div className="text-xs font-mono uppercase tracking-widest text-[#E5A454]">
+              Миссия 10 · Свободное плавание
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#FFB8BE] tracking-tight">
+              Дальше бога нет, выживет сильнейший
+            </h1>
+            <p className="text-xs text-[#C7A8AD] max-w-md mx-auto leading-relaxed">
+              На этом этапе готовых подсказок больше нет — используй весь накопленный опыт в Godot 4, документацию и собственную фантазию.
+            </p>
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#E06C75] text-[#1A0D0F] text-xs font-semibold hover:bg-[#EA858D] transition-colors cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Вернуться на карту миссий</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-[#E5A454]/40 bg-[#1F1A14] p-8 text-center space-y-3">
+            <div className="text-base font-bold text-[#E5A454]">{error}</div>
+            <p className="text-xs text-[#C7B49B] max-w-md mx-auto">
+              Файл с описанием урока должен находиться по пути <code className="text-[#CBEF9C]">assets/docs/{docName}</code> или быть создан в редакторе миссий преподавателя.
+            </p>
+          </div>
+        )
       )}
 
       {lesson && (

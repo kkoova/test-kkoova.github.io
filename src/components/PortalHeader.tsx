@@ -1,7 +1,16 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { Eye, LogIn, LogOut, Monitor, ShieldCheck, Users } from 'lucide-react';
 
-export type PortalSection = 'course' | 'project' | 'test';
+export type PortalSection = 'course' | 'project' | 'test' | 'bonus' | 'adhd' | 'casino';
+
+const LOGO_GAGS = [
+  { badge: '👀', text: 'Зачем ты на меня нажал?' },
+  { badge: '🐱', text: 'Мяу. Иди делай миссию!' },
+  { badge: '⚡', text: '+0 к оценке, но красиво' },
+  { badge: '🤖', text: 'Я просто буква G, отстань!' },
+  { badge: '🔥', text: 'Godot всё видит...' },
+  { badge: '💀', text: 'Осторожно, сейчас скомпилируюсь!' },
+];
 
 interface PortalHeaderProps {
   activeSection: PortalSection;
@@ -40,6 +49,26 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
   onSignIn,
   onSignOut,
 }) => {
+  const [logoClicks, setLogoClicks] = useState(0);
+  const [activeGag, setActiveGag] = useState<{ badge: string; text: string } | null>(null);
+  const gagTimerRef = useRef<number | null>(null);
+
+  const handleLogoClick = () => {
+    const nextClicks = logoClicks + 1;
+    setLogoClicks(nextClicks);
+    const gag = LOGO_GAGS[(nextClicks - 1) % LOGO_GAGS.length];
+    const text =
+      nextClicks >= 7 && nextClicks % 3 === 0
+        ? `Уже ${nextClicks} кликов! Лаба сама себя не сдаст`
+        : gag.text;
+    setActiveGag({ badge: gag.badge, text });
+    if (gagTimerRef.current) window.clearTimeout(gagTimerRef.current);
+    gagTimerRef.current = window.setTimeout(() => {
+      setActiveGag(null);
+    }, 2200);
+    onNavigate('course');
+  };
+
   return (
     <header className="w-full border-b border-[#222D38] bg-[#131A22]">
       {isStudentPreviewMode && (
@@ -80,23 +109,38 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-8">
-        {/* Zone 1: Single-element Brand */}
-        <button
-          type="button"
-          onClick={() => onNavigate('course')}
-          className="flex items-center gap-3 whitespace-nowrap shrink-0 cursor-pointer text-left"
-        >
-          <div className="w-8 h-8 rounded-md bg-[#213124] border border-[#5D8247] flex items-center justify-center font-mono font-bold text-sm text-[#CBEF9C]">
-            G
-          </div>
-          <span className="text-base font-bold tracking-tight text-[#F1F6FA]">
-            Mobile Godot
-          </span>
-        </button>
+      <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-4">
+        {/* Zone 1: Interactive Brand Logo */}
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={handleLogoClick}
+            title="Нажми на логотип..."
+            className="flex items-center gap-3 whitespace-nowrap shrink-0 cursor-pointer text-left group"
+          >
+            <div
+              className={`w-8 h-8 rounded-md border flex items-center justify-center font-mono font-bold text-sm transition-all duration-200 ${
+                activeGag
+                  ? 'bg-[#2C2415] border-[#E5A454] text-[#F3D3A7] scale-110 -rotate-6'
+                  : 'bg-[#213124] border-[#5D8247] text-[#CBEF9C] group-hover:scale-105'
+              }`}
+            >
+              {activeGag ? activeGag.badge : 'G'}
+            </div>
+            <span className="text-base font-bold tracking-tight text-[#F1F6FA]">
+              Mobile Godot
+            </span>
+          </button>
+
+          {activeGag && (
+            <div className="absolute left-0 top-full mt-2 z-50 px-3 py-1.5 rounded-lg border border-[#E5A454]/60 bg-[#1F1A14] text-xs text-[#F3D3A7] shadow-xl whitespace-nowrap pointer-events-none">
+              {activeGag.text}
+            </div>
+          )}
+        </div>
 
         {/* Zone 2: Concise single-line navigation links */}
-        <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-[#9FB0C0]">
+        <nav className="hidden lg:flex items-center gap-4 xl:gap-5 text-xs font-medium text-[#9FB0C0]">
           <button
             type="button"
             onClick={() => onNavigate('course')}
@@ -129,6 +173,39 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
             }`}
           >
             Тестирования
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('bonus')}
+            className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeSection === 'bonus'
+                ? 'border-[#9ED164] text-[#F1F6FA]'
+                : 'border-transparent hover:text-white'
+            }`}
+          >
+            Доп. задание
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('adhd')}
+            className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeSection === 'adhd'
+                ? 'border-[#7CC4FA] text-[#F1F6FA]'
+                : 'border-transparent hover:text-[#7CC4FA]'
+            }`}
+          >
+            СДВГ-зона
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('casino')}
+            className={`py-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeSection === 'casino'
+                ? 'border-[#E5A454] text-[#F3D3A7]'
+                : 'border-transparent hover:text-[#E5A454]'
+            }`}
+          >
+            Апгрейдер
           </button>
           {isSignedIn && (
             <>
@@ -173,7 +250,7 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
                   title="Проверить сайт глазами студента"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  <span>Войти как студент</span>
+                  <span className="hidden sm:inline">Войти как студент</span>
                 </button>
               )}
               <button
@@ -229,8 +306,8 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
         </div>
       </div>
 
-      {/* Mobile navigation strip */}
-      <div className="flex md:hidden items-center gap-4 px-6 pb-3 overflow-x-auto text-xs font-medium text-[#9FB0C0]">
+      {/* Mobile / Tablet navigation strip */}
+      <div className="flex lg:hidden items-center gap-4 px-6 pb-3 overflow-x-auto text-xs font-medium text-[#9FB0C0]">
         <button
           type="button"
           onClick={() => onNavigate('course')}
@@ -258,6 +335,33 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
         >
           Тестирования
         </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('bonus')}
+          className={`whitespace-nowrap shrink-0 cursor-pointer ${
+            activeSection === 'bonus' ? 'text-[#9ED164] font-semibold' : ''
+          }`}
+        >
+          Доп. задание
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('adhd')}
+          className={`whitespace-nowrap shrink-0 cursor-pointer ${
+            activeSection === 'adhd' ? 'text-[#7CC4FA] font-semibold' : ''
+          }`}
+        >
+          СДВГ-зона
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('casino')}
+          className={`whitespace-nowrap shrink-0 cursor-pointer ${
+            activeSection === 'casino' ? 'text-[#E5A454] font-semibold' : ''
+          }`}
+        >
+          Апгрейдер
+        </button>
         {isSignedIn && (
           <>
             <button
@@ -280,3 +384,4 @@ export const PortalHeader: React.FC<PortalHeaderProps> = ({
     </header>
   );
 };
+

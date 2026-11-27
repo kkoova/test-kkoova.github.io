@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft, Clock } from 'lucide-react';
-import { TestGradeResult } from '../data/questions';
+import { getGradingThresholds, TestGradeResult } from '../data/questions';
 
 interface FinalResultsViewProps {
   studentName: string;
@@ -101,6 +101,28 @@ export const FinalResultsView: React.FC<FinalResultsViewProps> = ({
                 {violationsCount > 0 && <AlertTriangle className="w-5 h-5 shrink-0" />}
                 <span>{violationsCount}</span>
               </div>
+            </div>
+          </div>
+
+          <div className="mb-6 p-3.5 rounded-lg border border-[#26323F] bg-[#11171D] flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums">
+            <span className="text-[#8EA0B0]">Шкала для {result.total} зад.:</span>
+            <div className="flex flex-wrap items-center gap-3">
+              {getGradingThresholds(result.total).map((t) => (
+                <span
+                  key={t.grade}
+                  className={
+                    t.grade === '5'
+                      ? 'text-[#9ED164]'
+                      : t.grade === '4'
+                        ? 'text-[#7CC4FA]'
+                        : t.grade === '3'
+                          ? 'text-[#E5A454]'
+                          : 'text-[#E06C75]'
+                  }
+                >
+                  «{t.grade}»: {t.minScore}–{t.maxScore} ({t.percentRange})
+                </span>
+              ))}
             </div>
           </div>
 

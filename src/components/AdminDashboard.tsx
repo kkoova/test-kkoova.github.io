@@ -31,8 +31,11 @@ import {
 import { GroupRoster } from '../data/defaultRoster';
 import { Question, QUESTIONS as DEFAULT_QUESTIONS } from '../data/questions';
 import {
+  BonusSubmission,
   FeedbackEntry,
   GlobalTimerState,
+  LessonData,
+  Mission,
   stopGlobalTimer,
   triggerGlobalTimer,
 } from '../services/courseService';
@@ -59,6 +62,7 @@ import {
   ViolationEvent,
 } from '../services/telemetryService';
 import { QuestionEditorModal } from './QuestionEditorModal';
+import { MissionEditorPanel } from './MissionEditorPanel';
 
 interface AdminDashboardProps {
   sessions: StudentSession[];
@@ -70,6 +74,9 @@ interface AdminDashboardProps {
   projectGuide: ProjectGuideConfig;
   gradebook: GradebookConfig;
   allFeedback: FeedbackEntry[];
+  bonusSubmissions: BonusSubmission[];
+  missions: Mission[];
+  customDocs: Record<string, LessonData>;
   globalTimer: GlobalTimerState | null;
   adminLabel: string;
   onGradebookChange: (next: GradebookConfig) => void;
@@ -89,6 +96,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   projectGuide,
   gradebook,
   allFeedback,
+  bonusSubmissions,
+  missions,
+  customDocs,
   globalTimer,
   adminLabel,
   onGradebookChange,
@@ -97,7 +107,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onOpenSecondScreenInPlace,
   onOpenProjectGuide,
 }) => {
-  const [activeTab, setActiveTab] = useState<'live' | 'schedule' | 'course' | 'roster' | 'questions'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'schedule' | 'course' | 'missions' | 'roster' | 'questions'>('live');
   const [groupFilter, setGroupFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'violations'>(
     'all'
@@ -747,6 +757,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               Ведомость, зачёт и таймер
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('missions')}
+              className={`py-3.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                activeTab === 'missions'
+                  ? 'border-[#9ED164] text-[#9ED164]'
+                  : 'border-transparent text-[#8EA0B0] hover:text-white'
+              }`}
+            >
+              Редактор миссий ({missions.length})
             </button>
             <button
               type="button"
@@ -1950,7 +1971,62 @@ match /godot_test_config/{docId} { allow read: if true; allow write: if request.
                 </div>
               </div>
             </div>
+
+            {/* Bonus Submissions Overview */}
+            <div className="rounded-xl border border-[#24303C] bg-[#161E27] overflow-hidden">
+              <div className="px-5 py-4 border-b border-[#24303C] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <GraduationCap className="w-4 h-4 text-[#9ED164]" />
+                  <h2 className="text-sm font-bold text-white">
+                    Выполненные дополнительные задания ({bonusSubmissions.length})
+                  </h2>
+                </div>
+              </div>
+              <div className="divide-y divide-[#1F2A35] max-h-[300px] overflow-y-auto">
+                {bonusSubmissions.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-[#7C8D9C]">
+                    Студенты пока не сдавали дополнительное задание.
+                  </div>
+                ) : (
+                  bonusSubmissions.map((b) => (
+                    <div
+                      key={b.id}
+                      className="px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="font-semibold text-white">
+                          {b.studentName} · <span className="text-[#8EA0B0]">{b.group}</span>
+                        </div>
+                        <div className="text-[#9FB0C0]">
+                          {b.kind === 'quiz'
+                            ? `Код-челлендж: ${b.score}/${b.total} (${b.percentage}%)`
+                            : `Проект GitHub: ${b.note || 'Без комментария'}`}
+                        </div>
+                        {b.repoLink && (
+                          <a
+                            href={b.repoLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-block font-mono text-[#7CC4FA] hover:underline break-all"
+                          >
+                            {b.repoLink}
+                          </a>
+                        )}
+                      </div>
+                      <span className="px-2.5 py-1 rounded border border-[#5D8247] bg-[#213124] font-mono text-[11px] text-[#CBEF9C] shrink-0">
+                        {b.gradeLabel}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* TAB: Web Mission & Tutorial Editor */}
+        {activeTab === 'missions' && (
+          <MissionEditorPanel missions={missions} customDocs={customDocs} />
         )}
 
         {/* TAB 3: Roster Management */}

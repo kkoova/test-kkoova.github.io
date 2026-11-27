@@ -3,12 +3,12 @@ import { getFirestore } from 'firebase/firestore';
 import { getAuth, GithubAuthProvider } from 'firebase/auth';
 
 export const firebaseConfig = {
-  apiKey: 'AIzaSyC9rNY8ooNVkqQx4e5VNO5DFxByg1sIjLg',
-  authDomain: 'it-course-lele.firebaseapp.com',
-  projectId: 'it-course-lele',
-  storageBucket: 'it-course-lele.firebasestorage.app',
-  messagingSenderId: '605493061801',
-  appId: '1:605493061801:web:36caee46158b6ace8421b8',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyC9rNY8ooNVkqQx4e5VNO5DFxByg1sIjLg',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'it-course-lele.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'it-course-lele',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'it-course-lele.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '605493061801',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:605493061801:web:36caee46158b6ace8421b8',
 };
 
 export const ADMIN_UID = 'A4x3C68w2tSp65CplZgxEflCeVh1';

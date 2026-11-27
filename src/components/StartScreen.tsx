@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Clock, Lock, ShieldAlert, ShieldCheck, Unlock } from 'lucide-react';
+import { CalendarClock, Clock, GraduationCap, Lock, ShieldAlert, ShieldCheck, Unlock } from 'lucide-react';
 import { GroupRoster } from '../data/defaultRoster';
+import { getGradingThresholds } from '../data/questions';
 import {
   formatScheduledDateRu,
   getTestGroupAccess,
@@ -76,6 +77,22 @@ export const TestCatalogGrid: React.FC<TestCatalogGridProps> = ({
               </div>
 
               <p className="text-xs text-[#9FB0C0] leading-relaxed">{test.description}</p>
+
+              {(() => {
+                const thresholds = getGradingThresholds(qCount);
+                const t5 = thresholds.find((t) => t.grade === '5');
+                const t4 = thresholds.find((t) => t.grade === '4');
+                const t3 = thresholds.find((t) => t.grade === '3');
+                return (
+                  <div className="px-3 py-2 rounded-lg border border-[#24303C] bg-[#0F141A] flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono tabular-nums">
+                    <span className="text-[#8EA0B0]">Оценки:</span>
+                    <span className="text-[#9ED164]">5: {t5?.minScore}–{qCount}</span>
+                    <span className="text-[#7CC4FA]">4: {t4?.minScore}–{t4?.maxScore}</span>
+                    <span className="text-[#E5A454]">3: {t3?.minScore}–{t3?.maxScore}</span>
+                    <span className="text-[#E06C75]">2: &lt;{t3?.minScore}</span>
+                  </div>
+                );
+              })()}
 
               {(scheduleEntries.length > 0 || test.defaultScheduledAt) && (
                 <div className="p-3 rounded-lg border border-[#24303C] bg-[#0F141A] space-y-1.5">
@@ -291,6 +308,50 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 </div>
                 <h2 className="text-lg font-bold text-white">{selectedTest.title}</h2>
               </div>
+
+              {(() => {
+                const qCount =
+                  selectedTest.questionIds.length > 0
+                    ? selectedTest.questionIds.length
+                    : totalQuestions;
+                const thresholds = getGradingThresholds(qCount);
+                return (
+                  <div className="p-4 rounded-lg border border-[#24303C] bg-[#11171D] space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 text-xs font-mono">
+                      <span className="inline-flex items-center gap-1.5 text-[#9ED164]">
+                        <GraduationCap className="w-4 h-4" />
+                        <span>Критерии оценок</span>
+                      </span>
+                      <span className="text-[#8EA0B0] tabular-nums">Всего: {qCount} зад.</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {thresholds.map((t) => (
+                        <div
+                          key={t.grade}
+                          className="px-2.5 py-2 rounded border border-[#222D38] bg-[#161E27] flex items-center justify-between gap-2"
+                        >
+                          <span
+                            className={`font-semibold ${
+                              t.grade === '5'
+                                ? 'text-[#9ED164]'
+                                : t.grade === '4'
+                                  ? 'text-[#7CC4FA]'
+                                  : t.grade === '3'
+                                    ? 'text-[#E5A454]'
+                                    : 'text-[#E06C75]'
+                            }`}
+                          >
+                            «{t.grade}» ({t.percentRange})
+                          </span>
+                          <span className="font-mono text-[#E6EDF3] tabular-nums">
+                            {t.minScore}–{t.maxScore}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {!isSelectedTestOpenForAnyGroup ? (
                 <div className="p-5 rounded-lg border border-[#344656] bg-[#11171D] text-center space-y-3">

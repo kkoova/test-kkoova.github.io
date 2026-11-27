@@ -794,3 +794,68 @@ export function gradeTest(
     details,
   };
 }
+
+export interface GradeThresholdInfo {
+  grade: '5' | '4' | '3' | '2';
+  title: string;
+  percentRange: string;
+  minScore: number;
+  maxScore: number;
+  passed: boolean;
+}
+
+export function getGradingThresholds(totalQuestions: number): GradeThresholdInfo[] {
+  const total = Math.max(1, totalQuestions);
+  const scorePct = (s: number) => Math.round((s / total) * 100);
+
+  let min5 = total + 1;
+  let min4 = total + 1;
+  let min3 = total + 1;
+
+  for (let s = 0; s <= total; s++) {
+    const pct = scorePct(s);
+    if (pct >= 85 && s < min5) min5 = s;
+    if (pct >= 70 && s < min4) min4 = s;
+    if (pct >= 50 && s < min3) min3 = s;
+  }
+
+  min5 = Math.min(total, min5);
+  min4 = Math.min(min5, min4);
+  min3 = Math.min(min4, min3);
+
+  return [
+    {
+      grade: '5',
+      title: 'Отлично (5)',
+      percentRange: '85–100%',
+      minScore: min5,
+      maxScore: total,
+      passed: true,
+    },
+    {
+      grade: '4',
+      title: 'Хорошо (4)',
+      percentRange: '70–84%',
+      minScore: min4,
+      maxScore: Math.max(min4, min5 - 1),
+      passed: true,
+    },
+    {
+      grade: '3',
+      title: 'Удовлетворительно (3)',
+      percentRange: '50–69%',
+      minScore: min3,
+      maxScore: Math.max(min3, min4 - 1),
+      passed: true,
+    },
+    {
+      grade: '2',
+      title: 'Не зачтено (2)',
+      percentRange: '0–49%',
+      minScore: 0,
+      maxScore: Math.max(0, min3 - 1),
+      passed: false,
+    },
+  ];
+}
+

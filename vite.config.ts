@@ -22,6 +22,7 @@ function serveAndCopyMobileGodotPlugin(): Plugin {
     '.zip': 'application/zip',
     '.rar': 'application/vnd.rar',
     '.tscn': 'text/plain; charset=utf-8',
+    '.ttf': 'font/ttf',
   };
 
   return {
@@ -100,6 +101,9 @@ export default defineConfig(() => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

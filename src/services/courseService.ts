@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDocs,
   limit,
@@ -24,12 +25,57 @@ export interface Mission {
   steps: string[];
 }
 
+export interface LessonTreeNode {
+  name: string;
+  type: string;
+  level: number;
+}
+
+export type LessonItem =
+  | { type: 'text'; val: string }
+  | { type: 'button'; text: string; url: string }
+  | { type: 'config'; data: [string, string][] }
+  | { type: 'tip'; val: string }
+  | { type: 'instruction'; val: string }
+  | { type: 'timer'; minutes: number; goals: string[] }
+  | { type: 'grid'; items: string[] }
+  | { type: 'tree'; nodes: LessonTreeNode[] }
+  | { type: 'code'; title?: string; code: string }
+  | { type: 'image'; url: string; caption?: string };
+
+export interface LessonPhase {
+  id: string;
+  label: string;
+  header: string;
+  items: LessonItem[];
+}
+
+export interface LessonData {
+  unit: string;
+  title: string;
+  phases: LessonPhase[];
+}
+
 export interface MissionSubmission {
   id: string;
   studentName: string;
   githubUid: string;
   repository: string;
   topicId: string;
+  timestampMs: number;
+}
+
+export interface BonusSubmission {
+  id: string;
+  studentName: string;
+  group: string;
+  kind: 'quiz' | 'project';
+  score?: number;
+  total?: number;
+  percentage?: number;
+  gradeLabel: string;
+  repoLink?: string;
+  note?: string;
   timestampMs: number;
 }
 
@@ -50,6 +96,19 @@ export interface GlobalTimerState {
 
 const LOCAL_SUBMISSIONS_KEY = 'mobile_godot_local_submissions_v1';
 const LOCAL_FEEDBACK_KEY = 'mobile_godot_local_feedback_v1';
+const LOCAL_MISSIONS_KEY = 'mobile_godot_custom_missions_v1';
+const LOCAL_DOCS_KEY = 'mobile_godot_custom_docs_v1';
+const LOCAL_BONUS_KEY = 'mobile_godot_bonus_submissions_v1';
+const COURSE_CHANNEL_NAME = 'mobile_godot_course_sync_v1';
+
+let courseChannel: BroadcastChannel | null = null;
+function getCourseChannel(): BroadcastChannel | null {
+  if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return null;
+  if (!courseChannel) {
+    courseChannel = new BroadcastChannel(COURSE_CHANNEL_NAME);
+  }
+  return courseChannel;
+}
 
 function readLocalArray<T>(key: string): T[] {
   try {
@@ -68,6 +127,50 @@ function writeLocalArray<T>(key: string, items: T[]) {
   }
 }
 
+export function readLocalMissions(): Mission[] | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_MISSIONS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalMissions(missions: Mission[] | null) {
+  try {
+    if (missions === null) {
+      localStorage.removeItem(LOCAL_MISSIONS_KEY);
+    } else {
+      localStorage.setItem(LOCAL_MISSIONS_KEY, JSON.stringify(missions));
+    }
+    getCourseChannel()?.postMessage({ kind: 'missions_update', missions });
+  } catch {
+    // ignore
+  }
+}
+
+export function readLocalCustomDocs(): Record<string, LessonData> {
+  try {
+    const raw = localStorage.getItem(LOCAL_DOCS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalCustomDocs(docs: Record<string, LessonData>) {
+  try {
+    localStorage.setItem(LOCAL_DOCS_KEY, JSON.stringify(docs));
+    getCourseChannel()?.postMessage({ kind: 'docs_update', docs });
+  } catch {
+    // ignore
+  }
+}
+
 export async function fetchMissions(): Promise<Mission[]> {
   const res = await fetch('./data.json');
   if (!res.ok) {
@@ -77,6 +180,198 @@ export async function fetchMissions(): Promise<Mission[]> {
   return Array.isArray(data?.missions) ? data.missions : [];
 }
 
+export function subscribeMissions(
+  onUpdate: (missions: Mission[]) => void,
+  onError?: (errMsg: string) => void
+): () => void {
+  let defaultMissions: Mission[] = [];
+  let hasOverride = false;
+
+  const localOverride = readLocalMissions();
+  if (localOverride) {
+    hasOverride = true;
+    onUpdate(localOverride);
+  }
+
+  fetchMissions()
+    .then((list) => {
+      defaultMissions = list;
+      if (!hasOverride && !readLocalMissions()) {
+        onUpdate(list);
+      }
+    })
+    .catch((err: Error) => {
+      if (!hasOverride && onError) {
+        onError(err.message);
+      }
+    });
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'missions'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data?.missionsJson === 'string') {
+          try {
+            const parsed = JSON.parse(data.missionsJson);
+            if (Array.isArray(parsed)) {
+              hasOverride = true;
+              writeLocalMissions(parsed);
+              onUpdate(parsed);
+              return;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    },
+    () => {
+      // keep local / default
+    }
+  );
+
+  const ch = getCourseChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'missions_update') {
+      if (Array.isArray(ev.data.missions)) {
+        hasOverride = true;
+        onUpdate(ev.data.missions);
+      } else if (ev.data.missions === null && defaultMissions.length > 0) {
+        hasOverride = false;
+        onUpdate(defaultMissions);
+      }
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_MISSIONS_KEY) {
+      const m = readLocalMissions();
+      if (m) {
+        hasOverride = true;
+        onUpdate(m);
+      } else if (defaultMissions.length > 0) {
+        hasOverride = false;
+        onUpdate(defaultMissions);
+      }
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export async function saveMissions(missions: Mission[]): Promise<void> {
+  writeLocalMissions(missions);
+  await setDoc(doc(db, 'godot_test_config', 'missions'), {
+    missionsJson: JSON.stringify(missions),
+    updatedAtMs: Date.now(),
+  });
+}
+
+export async function resetMissionsToDefault(): Promise<Mission[]> {
+  const defaults = await fetchMissions();
+  writeLocalMissions(null);
+  try {
+    await deleteDoc(doc(db, 'godot_test_config', 'missions'));
+  } catch {
+    // ignore if rules block delete; fallback overwrite with defaults
+    await setDoc(doc(db, 'godot_test_config', 'missions'), {
+      missionsJson: JSON.stringify(defaults),
+      updatedAtMs: Date.now(),
+    }).catch(() => {});
+  }
+  return defaults;
+}
+
+export function subscribeCustomDocs(
+  onUpdate: (docs: Record<string, LessonData>) => void
+): () => void {
+  onUpdate(readLocalCustomDocs());
+
+  const unsubFirestore = onSnapshot(
+    doc(db, 'godot_test_config', 'lesson_docs'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data?.docsJson === 'string') {
+          try {
+            const parsed = JSON.parse(data.docsJson);
+            if (parsed && typeof parsed === 'object') {
+              writeLocalCustomDocs(parsed);
+              onUpdate(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    },
+    () => {
+      // keep local
+    }
+  );
+
+  const ch = getCourseChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'docs_update' && ev.data.docs) {
+      onUpdate(ev.data.docs);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_DOCS_KEY) {
+      onUpdate(readLocalCustomDocs());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+export async function saveCustomDoc(docName: string, lesson: LessonData): Promise<void> {
+  const current = readLocalCustomDocs();
+  const next = { ...current, [docName]: lesson };
+  writeLocalCustomDocs(next);
+  await setDoc(doc(db, 'godot_test_config', 'lesson_docs'), {
+    docsJson: JSON.stringify(next),
+    updatedAtMs: Date.now(),
+  });
+}
+
+export async function deleteCustomDoc(docName: string): Promise<void> {
+  const current = readLocalCustomDocs();
+  const next = { ...current };
+  delete next[docName];
+  writeLocalCustomDocs(next);
+  await setDoc(doc(db, 'godot_test_config', 'lesson_docs'), {
+    docsJson: JSON.stringify(next),
+    updatedAtMs: Date.now(),
+  });
+}
+
+export async function fetchLessonDoc(docName: string): Promise<LessonData> {
+  const customDocs = readLocalCustomDocs();
+  if (customDocs[docName]) {
+    return customDocs[docName];
+  }
+  const res = await fetch(`./assets/docs/${docName}`);
+  if (!res.ok) {
+    throw new Error(`Методичка «${docName}» не найдена`);
+  }
+  return res.json();
+}
+
 function extractMillis(ts: unknown): number {
   if (!ts) return Date.now();
   if (typeof ts === 'number') return ts;
@@ -84,6 +379,76 @@ function extractMillis(ts: unknown): number {
     return (ts as { toMillis: () => number }).toMillis();
   }
   return Date.now();
+}
+
+export async function submitBonusAssignment(
+  entry: Omit<BonusSubmission, 'id' | 'timestampMs'>
+): Promise<BonusSubmission> {
+  const record: BonusSubmission = {
+    ...entry,
+    id: `bonus_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestampMs: Date.now(),
+  };
+
+  const local = readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY);
+  const nextLocal = [record, ...local].slice(0, 150);
+  writeLocalArray(LOCAL_BONUS_KEY, nextLocal);
+  getCourseChannel()?.postMessage({ kind: 'bonus_update', items: nextLocal });
+
+  try {
+    await setDoc(doc(db, 'godot_bonus_submissions', record.id), record);
+  } catch (err) {
+    console.warn('Firestore bonus submission failed, saved locally:', err);
+  }
+
+  return record;
+}
+
+export function subscribeBonusSubmissions(
+  onUpdate: (items: BonusSubmission[]) => void
+): () => void {
+  onUpdate(readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY));
+
+  const q = query(
+    collection(db, 'godot_bonus_submissions'),
+    orderBy('timestampMs', 'desc'),
+    limit(150)
+  );
+  const unsubFirestore = onSnapshot(
+    q,
+    (snap) => {
+      const remote = snap.docs.map((d) => d.data() as BonusSubmission);
+      const map = new Map<string, BonusSubmission>();
+      for (const l of readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY)) map.set(l.id, l);
+      for (const r of remote) map.set(r.id, r);
+      const merged = Array.from(map.values()).sort((a, b) => b.timestampMs - a.timestampMs);
+      onUpdate(merged);
+    },
+    () => {
+      onUpdate(readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY));
+    }
+  );
+
+  const ch = getCourseChannel();
+  const handleChannel = (ev: MessageEvent) => {
+    if (ev.data?.kind === 'bonus_update' && Array.isArray(ev.data.items)) {
+      onUpdate(ev.data.items);
+    }
+  };
+  ch?.addEventListener('message', handleChannel);
+
+  const handleStorage = (ev: StorageEvent) => {
+    if (ev.key === LOCAL_BONUS_KEY) {
+      onUpdate(readLocalArray<BonusSubmission>(LOCAL_BONUS_KEY));
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+
+  return () => {
+    unsubFirestore();
+    ch?.removeEventListener('message', handleChannel);
+    window.removeEventListener('storage', handleStorage);
+  };
 }
 
 export async function submitMissionReport(params: {
@@ -352,3 +717,4 @@ export async function triggerGlobalTimer(minutes: number, goals: string[]): Prom
 export async function stopGlobalTimer(): Promise<void> {
   await setDoc(doc(db, 'system', 'timer'), { isActive: false }, { merge: true });
 }
+
